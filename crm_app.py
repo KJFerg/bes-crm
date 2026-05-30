@@ -29,6 +29,11 @@ st.set_page_config(
 # ══════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <style>
+    /* Hide Streamlit header bar and footer */
+    header[data-testid="stHeader"] { display: none !important; }
+    #MainMenu { visibility: hidden; }
+    footer { visibility: hidden; }
+
     /* Tighten padding for mobile */
     .block-container { padding-top: 1rem; padding-bottom: 0; }
 
