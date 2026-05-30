@@ -351,7 +351,7 @@ for idx, row in page_df.iterrows():
             positions = str(row.get("Positions", ""))
             if positions:
                 with st.popover("📋 Position History"):
-                    for pos in positions.split(" | "):
+                    for pos in reversed(positions.split(" | ")):
                         st.markdown(f"- {pos}")
 
             # Education
