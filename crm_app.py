@@ -16,12 +16,25 @@ from streamlit_gsheets import GSheetsConnection
 
 # Distribution tags available for contacts
 AVAILABLE_TAGS = [
+    # ── Audience / role ──
     "Big Data",
     "CEO President Mid",
     "HR",
     "HR Managers",
     "IT Execs for Newsletter",
     "IT Security",
+    # ── Pipeline / action (from temp-sheet color coding) ──
+    "Sent Strategy Link",
+    "Sent Strategy Link (2 Options)",
+    "Intro Summit/Parliament",
+    "Sent CC Proposal",
+    "PersonaWise Review",
+    "Paid Consult",
+    "Pro Bono Session",
+    "Looking",
+    # ── Cohort / source ──
+    "We-Connect Campaign A",
+    "Inbound (outside We-Connect)",
 ]
 
 # ══════════════════════════════════════════════════════════════════════════
