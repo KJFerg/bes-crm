@@ -136,21 +136,21 @@ def load_data():
         return pd.DataFrame()
 
 
+def _prep_df_for_write(df):
+    """Convert ALL columns to string before writing back to Sheets.
+    This prevents dtype errors when sparse columns are inferred as float64."""
+    for col in df.columns:
+        df[col] = df[col].astype(str).replace({"nan": "", "None": "", "NaN": ""})
+    return df
+
+
 def save_field(row_index, field_name, new_value):
     """Update a single field for a contact in Google Sheets."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Contacts", ttl=0)
-        # Force all text columns to string to prevent dtype errors
-        text_cols = ["Notes", "Phone1", "Phone2", "Email1", "Email2", "Email3",
-                     "FirstName", "LastName", "Positions", "Industry", "Location",
-                     "City", "State", "Sources", "DistributionTags", "Education",
-                     "LinkedInURL"]
-        for col in text_cols:
-            if col in df.columns:
-                df[col] = df[col].astype(str).replace({"nan": "", "None": ""})
-        df.fillna("", inplace=True)
-        df.at[row_index, field_name] = new_value
+        df = _prep_df_for_write(df)
+        df.at[row_index, field_name] = str(new_value)
         conn.update(worksheet="Contacts", data=df)
         st.cache_data.clear()
         return True
@@ -164,18 +164,10 @@ def save_note(row_index, new_note):
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Contacts", ttl=0)
-        # Force text columns to string to prevent dtype errors
-        text_cols = ["Notes", "Phone1", "Phone2", "Email1", "Email2", "Email3",
-                     "FirstName", "LastName", "Positions", "Industry", "Location",
-                     "City", "State", "Sources", "DistributionTags", "Education",
-                     "LinkedInURL"]
-        for col in text_cols:
-            if col in df.columns:
-                df[col] = df[col].astype(str).replace({"nan": "", "None": ""})
-        df.fillna("", inplace=True)
+        df = _prep_df_for_write(df)
         timestamp = datetime.now().strftime("%Y-%m-%d")
         note_entry = f"[{timestamp}] {new_note}"
-        existing = str(df.at[row_index, "Notes"]) if df.at[row_index, "Notes"] else ""
+        existing = df.at[row_index, "Notes"]
         df.at[row_index, "Notes"] = f"{existing} || {note_entry}" if existing else note_entry
         conn.update(worksheet="Contacts", data=df)
         st.cache_data.clear()
@@ -342,6 +334,10 @@ start_idx = (page - 1) * CONTACTS_PER_PAGE
 end_idx = start_idx + CONTACTS_PER_PAGE
 page_df = filtered.iloc[start_idx:end_idx]
 
+# ── Session state for selected contact ──
+if "selected_contact" not in st.session_state:
+    st.session_state.selected_contact = None
+
 # ── Contact List ──
 for idx, row in page_df.iterrows():
     title, company = parse_current_position(row.get("Positions", ""))
@@ -349,37 +345,38 @@ for idx, row in page_df.iterrows():
     if company:
         display_title += f" @ {company}" if display_title else company
 
-    # Source badges
-    source_badges = ""
-    for s in str(row.get("Sources", "")).split("; "):
-        if s.strip():
-            source_badges += f'<span class="source-badge">{s.strip()}</span>'
-
-    # Tag badges
-    tag_badges = ""
-    for t in str(row.get("DistributionTags", "")).split("; "):
-        if t.strip():
-            tag_badges += f'<span class="tag-badge">{t.strip()}</span>'
-
-    # Quick info line
-    meta_parts = []
-    if row.get("Email1"):
-        meta_parts.append(str(row["Email1"]))
-    if row.get("City") or row.get("State"):
-        loc = ", ".join(filter(None, [str(row.get("City", "")), str(row.get("State", ""))]))
-        if loc:
-            meta_parts.append(loc)
-    if row.get("EmailCount"):
-        meta_parts.append(f"{row['EmailCount']} emails")
-    if row.get("LinkedInMessages") == "Yes":
-        meta_parts.append("💬 LI msgs")
-    if row.get("HasResume") == "Yes":
-        meta_parts.append("📄 Resume")
-
     name = f"{row.get('FirstName', '')} {row.get('LastName', '')}".strip()
+    label = f"{name}  —  {display_title}" if display_title else name
+    is_selected = st.session_state.selected_contact == idx
 
-    with st.expander(f"**{name}**  —  {display_title}" if display_title else f"**{name}**"):
-        # ── Detail View ──
+    # Clickable contact row
+    if st.button(
+        f"{'▼' if is_selected else '▶'}  {label}",
+        key=f"contact_{idx}",
+        use_container_width=True,
+        type="secondary" if not is_selected else "primary"
+    ):
+        # Toggle: click again to close
+        if is_selected:
+            st.session_state.selected_contact = None
+        else:
+            st.session_state.selected_contact = idx
+        st.rerun()
+
+    # ── Detail View (only for selected contact) ──
+    if is_selected:
+        # Source badges
+        source_badges = ""
+        for s in str(row.get("Sources", "")).split("; "):
+            if s.strip():
+                source_badges += f'<span class="source-badge">{s.strip()}</span>'
+
+        # Tag badges
+        tag_badges = ""
+        for t in str(row.get("DistributionTags", "")).split("; "):
+            if t.strip():
+                tag_badges += f'<span class="tag-badge">{t.strip()}</span>'
+
         detail_left, detail_right = st.columns([2, 1])
 
         with detail_left:
@@ -444,7 +441,6 @@ for idx, row in page_df.iterrows():
                         st.rerun()
 
             # ── Read-only Info ──
-            # Location
             loc_parts = []
             if row.get("City"):
                 loc_parts.append(str(row["City"]))
@@ -477,6 +473,8 @@ for idx, row in page_df.iterrows():
                 st.caption(f"Last active: {row['LastActivityDate']}")
             if row.get("ConnectionDate"):
                 st.caption(f"Connected: {row['ConnectionDate']}")
+
+        st.divider()
 
 # ── Pagination Controls ──
 if total_pages > 1:
