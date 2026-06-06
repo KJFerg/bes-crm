@@ -448,26 +448,23 @@ with detail_col:
                 st.caption(f"Connected: {row['ConnectionDate']}")
 
         with contact_col:
-            # ── Editable Tags ──
-            st.markdown("**Tags**")
-            current_tags = str(row.get("DistributionTags", ""))
-            if current_tags in ("", "nan", "None"):
-                current_tags = ""
-            edit_tags = st.text_input("Tags", value=current_tags, key=f"tags_{sel_idx}",
-                                      label_visibility="collapsed",
-                                      on_change=_save_on_change, args=(f"tags_{sel_idx}", "DistributionTags", sel_idx))
-
-            # Show available tags as reference
-            st.caption(f"Available: {', '.join(AVAILABLE_TAGS)}")
-
-            # ── Editable Contact Fields (auto-save on Enter) ──
-            st.markdown("**Edit Contact Info**")
-
             def _save_on_change(field_key, field_name, row_idx):
                 """Callback: auto-save when user presses Enter or tabs away."""
                 new_val = st.session_state[field_key]
                 save_field(row_idx, field_name, new_val)
 
+            # ── Editable Tags ──
+            st.markdown("**Tags**")
+            current_tags = str(row.get("DistributionTags", ""))
+            if current_tags in ("", "nan", "None"):
+                current_tags = ""
+            st.text_input("Tags", value=current_tags, key=f"tags_{sel_idx}",
+                          label_visibility="collapsed",
+                          on_change=_save_on_change, args=(f"tags_{sel_idx}", "DistributionTags", sel_idx))
+            st.caption(f"Available: {', '.join(AVAILABLE_TAGS)}")
+
+            # ── Editable Contact Fields (auto-save on Enter) ──
+            st.markdown("**Edit Contact Info**")
             st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{sel_idx}",
                           on_change=_save_on_change, args=(f"email1_{sel_idx}", "Email1", sel_idx))
             st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{sel_idx}",
@@ -477,19 +474,37 @@ with detail_col:
 
         # ── Notes (full width below) ──
         st.markdown("---")
-        notes = str(row.get("Notes", ""))
-        if notes and notes not in ("", "nan", "None"):
-            st.markdown("**Notes:**")
-            for note in notes.split(" || "):
-                clean_note = note.strip()
-                if clean_note and clean_note not in ("nan", "None"):
-                    st.markdown(f"> {clean_note}")
+        notes_raw = str(row.get("Notes", ""))
+        all_notes = []
+        if notes_raw and notes_raw not in ("", "nan", "None"):
+            all_notes = [n.strip() for n in notes_raw.split(" || ") if n.strip() and n.strip() not in ("nan", "None")]
 
+        note_count = len(all_notes)
+        email_count = row.get("EmailCount", "")
+        stats_line = f"**Notes** ({note_count})"
+        if email_count and str(email_count) not in ("", "nan", "None", "0"):
+            stats_line += f"&emsp;|&emsp;{email_count} emails"
+        st.markdown(stats_line, unsafe_allow_html=True)
+
+        # Add new note
         new_note = st.text_input("Add note", key=f"note_{sel_idx}", placeholder="Type a note and press Enter...")
         if new_note:
             if save_note(sel_idx, new_note):
                 st.success("Note saved!")
                 st.rerun()
+
+        # Show 2 most recent notes
+        if all_notes:
+            recent = all_notes[-2:] if len(all_notes) >= 2 else all_notes
+            for note in reversed(recent):
+                st.markdown(f"> {note}")
+
+            # Show older notes behind a button
+            if len(all_notes) > 2:
+                older = all_notes[:-2]
+                with st.expander(f"See {len(older)} older notes"):
+                    for note in reversed(older):
+                        st.markdown(f"> {note}")
 
     else:
         st.markdown("*Select a contact from the list to view details.*")
