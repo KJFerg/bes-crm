@@ -414,8 +414,45 @@ for idx, row in page_df.iterrows():
                     st.rerun()
 
         with detail_right:
+            # ── Key Info First (always visible) ──
+
+            # LinkedIn
+            if row.get("LinkedInURL"):
+                st.markdown(f"🔗 [LinkedIn Profile]({row['LinkedInURL']})")
+
+            # Location
+            loc_parts = []
+            if row.get("City"):
+                loc_parts.append(str(row["City"]))
+            if row.get("State"):
+                loc_parts.append(str(row["State"]))
+            if row.get("Location") and not loc_parts:
+                loc_parts.append(str(row["Location"]))
+            if loc_parts:
+                st.markdown(f"📍 {', '.join(loc_parts)}")
+
+            if row.get("Industry"):
+                st.markdown(f"🏢 {row['Industry']}")
+
+            # Tags
+            if tag_badges:
+                st.markdown(tag_badges, unsafe_allow_html=True)
+
+            # Sources
+            if source_badges:
+                st.markdown(source_badges, unsafe_allow_html=True)
+
+            # Stats
+            if row.get("EmailCount"):
+                st.caption(f"{row['EmailCount']} email exchanges")
+            if row.get("LastActivityDate"):
+                st.caption(f"Last active: {row['LastActivityDate']}")
+            if row.get("ConnectionDate"):
+                st.caption(f"Connected: {row['ConnectionDate']}")
+
             # ── Editable Contact Fields ──
-            st.markdown("**Contact Info** *(edit & save)*")
+            st.markdown("---")
+            st.markdown("**Edit Contact Info**")
 
             edit_email1 = st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{idx}")
             edit_email2 = st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{idx}")
@@ -439,40 +476,6 @@ for idx, row in page_df.iterrows():
                     if ok:
                         st.success("Saved!")
                         st.rerun()
-
-            # ── Read-only Info ──
-            loc_parts = []
-            if row.get("City"):
-                loc_parts.append(str(row["City"]))
-            if row.get("State"):
-                loc_parts.append(str(row["State"]))
-            if row.get("Location") and not loc_parts:
-                loc_parts.append(str(row["Location"]))
-            if loc_parts:
-                st.markdown(f"📍 {', '.join(loc_parts)}")
-
-            if row.get("Industry"):
-                st.markdown(f"🏢 {row['Industry']}")
-
-            # LinkedIn
-            if row.get("LinkedInURL"):
-                st.markdown(f"[LinkedIn Profile]({row['LinkedInURL']})")
-
-            # Tags
-            if tag_badges:
-                st.markdown(tag_badges, unsafe_allow_html=True)
-
-            # Sources
-            if source_badges:
-                st.markdown(source_badges, unsafe_allow_html=True)
-
-            # Stats
-            if row.get("EmailCount"):
-                st.caption(f"{row['EmailCount']} email exchanges")
-            if row.get("LastActivityDate"):
-                st.caption(f"Last active: {row['LastActivityDate']}")
-            if row.get("ConnectionDate"):
-                st.caption(f"Connected: {row['ConnectionDate']}")
 
         st.divider()
 
