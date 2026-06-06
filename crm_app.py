@@ -338,33 +338,40 @@ page_df = filtered.iloc[start_idx:end_idx]
 if "selected_contact" not in st.session_state:
     st.session_state.selected_contact = None
 
-# ── Contact List ──
-for idx, row in page_df.iterrows():
-    title, company = parse_current_position(row.get("Positions", ""))
-    display_title = f"{title}" if title else ""
-    if company:
-        display_title += f" @ {company}" if display_title else company
+# ── Two-Panel Layout: List on Left, Detail on Right ──
+list_col, detail_col = st.columns([1, 2])
 
-    name = f"{row.get('FirstName', '')} {row.get('LastName', '')}".strip()
-    label = f"{name}  —  {display_title}" if display_title else name
-    is_selected = st.session_state.selected_contact == idx
+with list_col:
+    st.markdown("##### Results")
+    for idx, row in page_df.iterrows():
+        title, company = parse_current_position(row.get("Positions", ""))
+        display_title = f"{title}" if title else ""
+        if company:
+            display_title += f" @ {company}" if display_title else company
 
-    # Clickable contact row
-    if st.button(
-        f"{'▼' if is_selected else '▶'}  {label}",
-        key=f"contact_{idx}",
-        use_container_width=True,
-        type="secondary" if not is_selected else "primary"
-    ):
-        # Toggle: click again to close
-        if is_selected:
-            st.session_state.selected_contact = None
-        else:
+        name = f"{row.get('FirstName', '')} {row.get('LastName', '')}".strip()
+        subtitle = display_title if display_title else ""
+        is_selected = st.session_state.selected_contact == idx
+
+        if st.button(
+            f"**{name}**\n{subtitle}" if subtitle else f"**{name}**",
+            key=f"contact_{idx}",
+            use_container_width=True,
+            type="primary" if is_selected else "secondary"
+        ):
             st.session_state.selected_contact = idx
-        st.rerun()
+            st.rerun()
 
-    # ── Detail View (only for selected contact) ──
-    if is_selected:
+with detail_col:
+    sel_idx = st.session_state.selected_contact
+    if sel_idx is not None and sel_idx in page_df.index:
+        row = page_df.loc[sel_idx]
+        title, company = parse_current_position(row.get("Positions", ""))
+        display_title = f"{title}" if title else ""
+        if company:
+            display_title += f" @ {company}" if display_title else company
+        name = f"{row.get('FirstName', '')} {row.get('LastName', '')}".strip()
+
         # Source badges
         source_badges = ""
         for s in str(row.get("Sources", "")).split("; "):
@@ -377,14 +384,16 @@ for idx, row in page_df.iterrows():
             if t.strip():
                 tag_badges += f'<span class="tag-badge">{t.strip()}</span>'
 
-        detail_left, detail_right = st.columns([2, 1])
+        # ── Header ──
+        st.markdown(f"### {name}")
+        if display_title:
+            st.markdown(f"**{display_title}**")
 
-        with detail_left:
-            # Current position
-            if display_title:
-                st.markdown(f"**{display_title}**")
+        # ── Two sub-columns: info + contact ──
+        info_col, contact_col = st.columns([1, 1])
 
-            # All positions history
+        with info_col:
+            # Position history
             positions = str(row.get("Positions", ""))
             if positions:
                 with st.popover("📋 Position History"):
@@ -397,24 +406,6 @@ for idx, row in page_df.iterrows():
                 with st.popover("🎓 Education"):
                     for edu in education.split(" | "):
                         st.markdown(f"- {edu}")
-
-            # Notes
-            notes = str(row.get("Notes", ""))
-            if notes:
-                st.markdown("**Notes:**")
-                for note in notes.split(" || "):
-                    if note.strip():
-                        st.markdown(f"> {note.strip()}")
-
-            # Add new note
-            new_note = st.text_input("Add note", key=f"note_{idx}", placeholder="Type a note and press Enter...")
-            if new_note:
-                if save_note(idx, new_note):
-                    st.success("Note saved!")
-                    st.rerun()
-
-        with detail_right:
-            # ── Key Info First (always visible) ──
 
             # LinkedIn
             if row.get("LinkedInURL"):
@@ -450,13 +441,13 @@ for idx, row in page_df.iterrows():
             if row.get("ConnectionDate"):
                 st.caption(f"Connected: {row['ConnectionDate']}")
 
+        with contact_col:
             # ── Editable Contact Fields ──
-            st.markdown("---")
             st.markdown("**Edit Contact Info**")
 
-            edit_email1 = st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{idx}")
-            edit_email2 = st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{idx}")
-            edit_phone1 = st.text_input("Phone", value=row.get("Phone1", ""), key=f"phone1_{idx}")
+            edit_email1 = st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{sel_idx}")
+            edit_email2 = st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{sel_idx}")
+            edit_phone1 = st.text_input("Phone", value=row.get("Phone1", ""), key=f"phone1_{sel_idx}")
 
             # Save button for contact info edits
             changed = (
@@ -465,19 +456,35 @@ for idx, row in page_df.iterrows():
                 edit_phone1 != row.get("Phone1", "")
             )
             if changed:
-                if st.button("💾 Save Changes", key=f"save_{idx}"):
+                if st.button("💾 Save Changes", key=f"save_{sel_idx}"):
                     ok = True
                     if edit_email1 != row.get("Email1", ""):
-                        ok = ok and save_field(idx, "Email1", edit_email1)
+                        ok = ok and save_field(sel_idx, "Email1", edit_email1)
                     if edit_email2 != row.get("Email2", ""):
-                        ok = ok and save_field(idx, "Email2", edit_email2)
+                        ok = ok and save_field(sel_idx, "Email2", edit_email2)
                     if edit_phone1 != row.get("Phone1", ""):
-                        ok = ok and save_field(idx, "Phone1", edit_phone1)
+                        ok = ok and save_field(sel_idx, "Phone1", edit_phone1)
                     if ok:
                         st.success("Saved!")
                         st.rerun()
 
-        st.divider()
+        # ── Notes (full width below) ──
+        st.markdown("---")
+        notes = str(row.get("Notes", ""))
+        if notes:
+            st.markdown("**Notes:**")
+            for note in notes.split(" || "):
+                if note.strip():
+                    st.markdown(f"> {note.strip()}")
+
+        new_note = st.text_input("Add note", key=f"note_{sel_idx}", placeholder="Type a note and press Enter...")
+        if new_note:
+            if save_note(sel_idx, new_note):
+                st.success("Note saved!")
+                st.rerun()
+
+    else:
+        st.markdown("*Select a contact from the list to view details.*")
 
 # ── Pagination Controls ──
 if total_pages > 1:
