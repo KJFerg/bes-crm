@@ -431,10 +431,6 @@ with detail_col:
             if row.get("Industry"):
                 st.markdown(f"🏢 {row['Industry']}")
 
-            # Tags
-            if tag_badges:
-                st.markdown(tag_badges, unsafe_allow_html=True)
-
             # Sources
             if source_badges:
                 st.markdown(source_badges, unsafe_allow_html=True)
@@ -484,7 +480,8 @@ with detail_col:
                           on_change=_save_on_change, args=(f"email1_{sel_idx}", "Email1", sel_idx))
             st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{sel_idx}",
                           on_change=_save_on_change, args=(f"email2_{sel_idx}", "Email2", sel_idx))
-            st.text_input("Phone", value=row.get("Phone1", ""), key=f"phone1_{sel_idx}",
+            phone_val = str(row.get("Phone1", "")).lstrip("'")  # Strip leading apostrophe from Sheets
+            st.text_input("Phone", value=phone_val, key=f"phone1_{sel_idx}",
                           on_change=_save_on_change, args=(f"phone1_{sel_idx}", "Phone1", sel_idx))
 
         # ── Notes (full width below) ──
@@ -498,7 +495,10 @@ with detail_col:
         email_count = row.get("EmailCount", "")
         stats_line = f"**Notes** ({note_count})"
         if email_count and str(email_count) not in ("", "nan", "None", "0"):
-            stats_line += f"&emsp;|&emsp;{email_count} emails"
+            try:
+                stats_line += f"&emsp;|&emsp;{int(float(email_count))} emails"
+            except (ValueError, TypeError):
+                stats_line += f"&emsp;|&emsp;{email_count} emails"
         st.markdown(stats_line, unsafe_allow_html=True)
 
         # Add new note
@@ -508,18 +508,12 @@ with detail_col:
                 st.success("Note saved!")
                 st.rerun()
 
-        # Show 2 most recent notes
+        # Show all notes, most recent first, one per line
         if all_notes:
-            recent = all_notes[-2:] if len(all_notes) >= 2 else all_notes
-            for note in reversed(recent):
-                st.markdown(f"> {note}")
-
-            # Show older notes behind a button
-            if len(all_notes) > 2:
-                older = all_notes[:-2]
-                with st.expander(f"See {len(older)} older notes"):
-                    for note in reversed(older):
-                        st.markdown(f"> {note}")
+            notes_display = "\n".join(reversed(all_notes))
+            st.text_area("Previous notes", value=notes_display, height=200,
+                         disabled=True, key=f"notes_display_{sel_idx}",
+                         label_visibility="collapsed")
 
     else:
         st.markdown("*Select a contact from the list to view details.*")
