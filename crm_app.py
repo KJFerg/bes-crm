@@ -14,6 +14,16 @@ import pandas as pd
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 
+# Distribution tags available for contacts
+AVAILABLE_TAGS = [
+    "Big Data",
+    "CEO President Mid",
+    "HR",
+    "HR Managers",
+    "IT Execs for Newsletter",
+    "IT Security",
+]
+
 # ══════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════════════
@@ -438,6 +448,18 @@ with detail_col:
                 st.caption(f"Connected: {row['ConnectionDate']}")
 
         with contact_col:
+            # ── Editable Tags ──
+            st.markdown("**Tags**")
+            current_tags = str(row.get("DistributionTags", ""))
+            if current_tags in ("", "nan", "None"):
+                current_tags = ""
+            edit_tags = st.text_input("Tags", value=current_tags, key=f"tags_{sel_idx}",
+                                      label_visibility="collapsed",
+                                      on_change=_save_on_change, args=(f"tags_{sel_idx}", "DistributionTags", sel_idx))
+
+            # Show available tags as reference
+            st.caption(f"Available: {', '.join(AVAILABLE_TAGS)}")
+
             # ── Editable Contact Fields (auto-save on Enter) ──
             st.markdown("**Edit Contact Info**")
 
