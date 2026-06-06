@@ -169,6 +169,21 @@ def save_field(row_index, field_name, new_value):
         return False
 
 
+def delete_contact(row_index):
+    """Delete a contact row from Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Contacts", ttl=0)
+        df = _prep_df_for_write(df)
+        df = df.drop(index=row_index).reset_index(drop=True)
+        conn.update(worksheet="Contacts", data=df)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Could not delete contact: {e}")
+        return False
+
+
 def save_note(row_index, new_note):
     """Append a note to a contact's Notes field in Google Sheets."""
     try:
@@ -494,10 +509,13 @@ with detail_col:
             all_notes = [n.strip() for n in notes_raw.split(" || ") if n.strip() and n.strip() not in ("nan", "None")]
 
         # Explicit sort: newest first by date prefix [YYYY-MM-DD], pinned notes on top
-        all_notes.sort(
-            key=lambda n: n[1:11] if len(n) > 10 and n[1:5].isdigit() else "9999",
-            reverse=True
-        )
+        def _note_sort_key(note):
+            if note.startswith("[Crelate-pinned]"):
+                return "9999-99-99"
+            if note.startswith("[") and len(note) > 11 and note[5] == "-":
+                return note[1:11]
+            return "0000-00-00"
+        all_notes = sorted(all_notes, key=_note_sort_key, reverse=True)
 
         note_count = len(all_notes)
         stats_line = f"**Notes** ({note_count})"
@@ -521,6 +539,26 @@ with detail_col:
             st.text_area("Previous notes", value=notes_display, height=200,
                          disabled=True, key=f"notes_display_{sel_idx}",
                          label_visibility="collapsed")
+
+        # ── Delete Contact ──
+        st.markdown("")  # spacer
+        if st.session_state.get(f"confirm_delete_{sel_idx}"):
+            st.warning(f"Permanently delete **{name}**? This cannot be undone.")
+            confirm_col, cancel_col, _ = st.columns([1, 1, 3])
+            with confirm_col:
+                if st.button("Yes, delete", key=f"do_delete_{sel_idx}", type="primary"):
+                    if delete_contact(sel_idx):
+                        st.session_state.selected_contact = None
+                        st.session_state.pop(f"confirm_delete_{sel_idx}", None)
+                        st.rerun()
+            with cancel_col:
+                if st.button("Cancel", key=f"cancel_delete_{sel_idx}"):
+                    st.session_state.pop(f"confirm_delete_{sel_idx}", None)
+                    st.rerun()
+        else:
+            if st.button("🗑️ Delete Contact", key=f"delete_{sel_idx}"):
+                st.session_state[f"confirm_delete_{sel_idx}"] = True
+                st.rerun()
 
     else:
         st.markdown("*Select a contact from the list to view details.*")
