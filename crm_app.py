@@ -383,79 +383,38 @@ with detail_col:
             if s.strip():
                 source_badges += f'<span class="source-badge">{s.strip()}</span>'
 
-        # Tag badges
-        tag_badges = ""
-        for t in str(row.get("DistributionTags", "")).split("; "):
-            if t.strip():
-                tag_badges += f'<span class="tag-badge">{t.strip()}</span>'
+        # ── Split into main area and right sidebar from the top ──
+        main_area, right_area = st.columns([3, 2])
 
-        # ── Header: Name, Title, Location on one block ──
-        loc_parts = []
-        if row.get("City"):
-            loc_parts.append(str(row["City"]))
-        if row.get("State"):
-            loc_parts.append(str(row["State"]))
-        if row.get("Location") and not loc_parts:
-            loc_parts.append(str(row["Location"]))
-        loc_str = ', '.join(loc_parts)
-
-        header_line = f"### {name}"
-        if loc_str:
-            header_line += f"&emsp;📍 {loc_str}"
-        st.markdown(header_line, unsafe_allow_html=True)
-        if display_title:
-            st.markdown(f"**{display_title}**")
-
-        # ── Two sub-columns: info + contact ──
-        info_col, contact_col = st.columns([1, 1])
-
-        with info_col:
-            # Position history
-            positions = str(row.get("Positions", ""))
-            if positions:
-                with st.popover("📋 Position History"):
-                    for pos in reversed(positions.split(" | ")):
-                        st.markdown(f"- {pos}")
-
-            # Education
-            education = str(row.get("Education", ""))
-            if education:
-                with st.popover("🎓 Education"):
-                    for edu in education.split(" | "):
-                        st.markdown(f"- {edu}")
-
-            # LinkedIn
-            if row.get("LinkedInURL"):
-                st.markdown(f"🔗 [LinkedIn Profile]({row['LinkedInURL']})")
-
-            if row.get("Industry"):
-                st.markdown(f"🏢 {row['Industry']}")
-
-            # Sources
-            if source_badges:
-                st.markdown(source_badges, unsafe_allow_html=True)
-
-            # Stats
-            if row.get("EmailCount"):
-                st.caption(f"{row['EmailCount']} email exchanges")
-            if row.get("LastActivityDate"):
-                st.caption(f"Last active: {row['LastActivityDate']}")
-            if row.get("ConnectionDate"):
-                st.caption(f"Connected: {row['ConnectionDate']}")
-
-        with contact_col:
+        with right_area:
             def _save_on_change(field_key, field_name, row_idx):
                 """Callback: auto-save when user presses Enter or tabs away."""
                 new_val = st.session_state[field_key]
                 save_field(row_idx, field_name, new_val)
 
-            # ── Editable Tags (multi-select with X to remove) ──
+            # ── Contact Info (above Tags) ──
+            st.markdown("**Contact Info**")
+            st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{sel_idx}",
+                          on_change=_save_on_change, args=(f"email1_{sel_idx}", "Email1", sel_idx))
+            email2_val = str(row.get("Email2", ""))
+            if email2_val and email2_val not in ("", "nan", "None"):
+                st.text_input("Email 2", value=email2_val, key=f"email2_{sel_idx}",
+                              on_change=_save_on_change, args=(f"email2_{sel_idx}", "Email2", sel_idx))
+            phone1_val = str(row.get("Phone1", "")).lstrip("'")
+            if phone1_val and phone1_val not in ("", "nan", "None"):
+                st.text_input("Phone 1", value=phone1_val, key=f"phone1_{sel_idx}",
+                              on_change=_save_on_change, args=(f"phone1_{sel_idx}", "Phone1", sel_idx))
+            phone2_val = str(row.get("Phone2", "")).lstrip("'")
+            if phone2_val and phone2_val not in ("", "nan", "None"):
+                st.text_input("Phone 2", value=phone2_val, key=f"phone2_{sel_idx}",
+                              on_change=_save_on_change, args=(f"phone2_{sel_idx}", "Phone2", sel_idx))
+
+            # ── Tags (below Contact Info) ──
             st.markdown("**Tags**")
             current_tags_str = str(row.get("DistributionTags", ""))
             if current_tags_str in ("", "nan", "None"):
                 current_tags_list = []
             else:
-                # Only include tags that exactly match available options
                 current_tags_list = [t.strip() for t in current_tags_str.split(";")
                                      if t.strip() and t.strip() in AVAILABLE_TAGS]
 
@@ -474,24 +433,73 @@ with detail_col:
                 args=(f"tags_{sel_idx}", sel_idx),
             )
 
-            # ── Editable Contact Fields (auto-save on Enter) ──
-            st.markdown("**Edit Contact Info**")
-            st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{sel_idx}",
-                          on_change=_save_on_change, args=(f"email1_{sel_idx}", "Email1", sel_idx))
-            st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{sel_idx}",
-                          on_change=_save_on_change, args=(f"email2_{sel_idx}", "Email2", sel_idx))
-            phone_val = str(row.get("Phone1", "")).lstrip("'")  # Strip leading apostrophe from Sheets
-            st.text_input("Phone", value=phone_val, key=f"phone1_{sel_idx}",
-                          on_change=_save_on_change, args=(f"phone1_{sel_idx}", "Phone1", sel_idx))
+        with main_area:
+            # ── Header: Name, Title, Location ──
+            loc_parts = []
+            if row.get("City"):
+                loc_parts.append(str(row["City"]))
+            if row.get("State"):
+                loc_parts.append(str(row["State"]))
+            if row.get("Location") and not loc_parts:
+                loc_parts.append(str(row["Location"]))
+            loc_str = ', '.join(loc_parts)
 
-        # ── Notes (full width below) ──
+            header_line = f"### {name}"
+            if loc_str:
+                header_line += f"&emsp;📍 {loc_str}"
+            st.markdown(header_line, unsafe_allow_html=True)
+            if display_title:
+                st.markdown(f"**{display_title}**")
+
+            # Position history & Education popovers inline
+            positions = str(row.get("Positions", ""))
+            if positions:
+                with st.popover("📋 Position History"):
+                    for pos in reversed(positions.split(" | ")):
+                        st.markdown(f"- {pos}")
+
+            education = str(row.get("Education", ""))
+            if education:
+                with st.popover("🎓 Education"):
+                    for edu in education.split(" | "):
+                        st.markdown(f"- {edu}")
+
+            # LinkedIn
+            if row.get("LinkedInURL"):
+                st.markdown(f"🔗 [LinkedIn Profile]({row['LinkedInURL']})")
+
+            # Sources
+            if source_badges:
+                st.markdown(source_badges, unsafe_allow_html=True)
+
+            # Stats line
+            stats_parts = []
+            email_count = row.get("EmailCount", "")
+            if email_count and str(email_count) not in ("", "nan", "None", "0"):
+                try:
+                    stats_parts.append(f"{int(float(email_count))} emails")
+                except (ValueError, TypeError):
+                    stats_parts.append(f"{email_count} emails")
+            if row.get("LastActivityDate"):
+                stats_parts.append(f"Last active: {row['LastActivityDate']}")
+            if row.get("ConnectionDate"):
+                stats_parts.append(f"Connected: {row['ConnectionDate']}")
+            if stats_parts:
+                st.caption("  ·  ".join(stats_parts))
+
+        # ── Notes (full width below both columns) ──
         notes_raw = str(row.get("Notes", ""))
         all_notes = []
         if notes_raw and notes_raw not in ("", "nan", "None"):
             all_notes = [n.strip() for n in notes_raw.split(" || ") if n.strip() and n.strip() not in ("nan", "None")]
 
+        # Explicit sort: newest first by date prefix [YYYY-MM-DD], pinned notes on top
+        all_notes.sort(
+            key=lambda n: n[1:11] if len(n) > 10 and n[1:5].isdigit() else "9999",
+            reverse=True
+        )
+
         note_count = len(all_notes)
-        email_count = row.get("EmailCount", "")
         stats_line = f"**Notes** ({note_count})"
         if email_count and str(email_count) not in ("", "nan", "None", "0"):
             try:
