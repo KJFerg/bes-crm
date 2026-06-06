@@ -379,8 +379,20 @@ with detail_col:
             if t.strip():
                 tag_badges += f'<span class="tag-badge">{t.strip()}</span>'
 
-        # ── Header ──
-        st.markdown(f"### {name}")
+        # ── Header: Name, Title, Location on one block ──
+        loc_parts = []
+        if row.get("City"):
+            loc_parts.append(str(row["City"]))
+        if row.get("State"):
+            loc_parts.append(str(row["State"]))
+        if row.get("Location") and not loc_parts:
+            loc_parts.append(str(row["Location"]))
+        loc_str = ', '.join(loc_parts)
+
+        header_line = f"### {name}"
+        if loc_str:
+            header_line += f"&emsp;📍 {loc_str}"
+        st.markdown(header_line, unsafe_allow_html=True)
         if display_title:
             st.markdown(f"**{display_title}**")
 
@@ -405,17 +417,6 @@ with detail_col:
             # LinkedIn
             if row.get("LinkedInURL"):
                 st.markdown(f"🔗 [LinkedIn Profile]({row['LinkedInURL']})")
-
-            # Location
-            loc_parts = []
-            if row.get("City"):
-                loc_parts.append(str(row["City"]))
-            if row.get("State"):
-                loc_parts.append(str(row["State"]))
-            if row.get("Location") and not loc_parts:
-                loc_parts.append(str(row["Location"]))
-            if loc_parts:
-                st.markdown(f"📍 {', '.join(loc_parts)}")
 
             if row.get("Industry"):
                 st.markdown(f"🏢 {row['Industry']}")
