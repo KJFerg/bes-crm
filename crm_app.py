@@ -459,7 +459,9 @@ with detail_col:
             if current_tags_str in ("", "nan", "None"):
                 current_tags_list = []
             else:
-                current_tags_list = [t.strip() for t in current_tags_str.split(";") if t.strip()]
+                # Only include tags that exactly match available options
+                current_tags_list = [t.strip() for t in current_tags_str.split(";")
+                                     if t.strip() and t.strip() in AVAILABLE_TAGS]
 
             def _save_tags(tag_key, row_idx):
                 """Save selected tags back to sheet as semicolon-separated."""
