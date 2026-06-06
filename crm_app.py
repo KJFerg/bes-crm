@@ -485,7 +485,6 @@ with detail_col:
                           on_change=_save_on_change, args=(f"phone1_{sel_idx}", "Phone1", sel_idx))
 
         # ── Notes (full width below) ──
-        st.markdown("---")
         notes_raw = str(row.get("Notes", ""))
         all_notes = []
         if notes_raw and notes_raw not in ("", "nan", "None"):
@@ -510,7 +509,7 @@ with detail_col:
 
         # Show all notes, most recent first, one per line
         if all_notes:
-            notes_display = "\n".join(reversed(all_notes))
+            notes_display = "\n".join(all_notes)
             st.text_area("Previous notes", value=notes_display, height=200,
                          disabled=True, key=f"notes_display_{sel_idx}",
                          label_visibility="collapsed")
