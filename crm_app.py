@@ -339,22 +339,17 @@ if "selected_contact" not in st.session_state:
     st.session_state.selected_contact = None
 
 # ── Two-Panel Layout: List on Left, Detail on Right ──
-list_col, detail_col = st.columns([1, 3])
+list_col, detail_col = st.columns([1, 4])
 
 with list_col:
-    st.markdown("##### Results")
     for idx, row in page_df.iterrows():
-        title, company = parse_current_position(row.get("Positions", ""))
-        display_title = f"{title}" if title else ""
-        if company:
-            display_title += f" @ {company}" if display_title else company
-
+        _, company = parse_current_position(row.get("Positions", ""))
         name = f"{row.get('FirstName', '')} {row.get('LastName', '')}".strip()
-        subtitle = display_title if display_title else ""
+        label = f"{name} — {company}" if company else name
         is_selected = st.session_state.selected_contact == idx
 
         if st.button(
-            f"**{name}**\n{subtitle}" if subtitle else f"**{name}**",
+            label,
             key=f"contact_{idx}",
             use_container_width=True,
             type="primary" if is_selected else "secondary"
@@ -442,31 +437,20 @@ with detail_col:
                 st.caption(f"Connected: {row['ConnectionDate']}")
 
         with contact_col:
-            # ── Editable Contact Fields ──
+            # ── Editable Contact Fields (auto-save on Enter) ──
             st.markdown("**Edit Contact Info**")
 
-            edit_email1 = st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{sel_idx}")
-            edit_email2 = st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{sel_idx}")
-            edit_phone1 = st.text_input("Phone", value=row.get("Phone1", ""), key=f"phone1_{sel_idx}")
+            def _save_on_change(field_key, field_name, row_idx):
+                """Callback: auto-save when user presses Enter or tabs away."""
+                new_val = st.session_state[field_key]
+                save_field(row_idx, field_name, new_val)
 
-            # Save button for contact info edits
-            changed = (
-                edit_email1 != row.get("Email1", "") or
-                edit_email2 != row.get("Email2", "") or
-                edit_phone1 != row.get("Phone1", "")
-            )
-            if changed:
-                if st.button("💾 Save Changes", key=f"save_{sel_idx}"):
-                    ok = True
-                    if edit_email1 != row.get("Email1", ""):
-                        ok = ok and save_field(sel_idx, "Email1", edit_email1)
-                    if edit_email2 != row.get("Email2", ""):
-                        ok = ok and save_field(sel_idx, "Email2", edit_email2)
-                    if edit_phone1 != row.get("Phone1", ""):
-                        ok = ok and save_field(sel_idx, "Phone1", edit_phone1)
-                    if ok:
-                        st.success("Saved!")
-                        st.rerun()
+            st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{sel_idx}",
+                          on_change=_save_on_change, args=(f"email1_{sel_idx}", "Email1", sel_idx))
+            st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{sel_idx}",
+                          on_change=_save_on_change, args=(f"email2_{sel_idx}", "Email2", sel_idx))
+            st.text_input("Phone", value=row.get("Phone1", ""), key=f"phone1_{sel_idx}",
+                          on_change=_save_on_change, args=(f"phone1_{sel_idx}", "Phone1", sel_idx))
 
         # ── Notes (full width below) ──
         st.markdown("---")
