@@ -453,15 +453,28 @@ with detail_col:
                 new_val = st.session_state[field_key]
                 save_field(row_idx, field_name, new_val)
 
-            # ── Editable Tags ──
+            # ── Editable Tags (multi-select with X to remove) ──
             st.markdown("**Tags**")
-            current_tags = str(row.get("DistributionTags", ""))
-            if current_tags in ("", "nan", "None"):
-                current_tags = ""
-            st.text_input("Tags", value=current_tags, key=f"tags_{sel_idx}",
-                          label_visibility="collapsed",
-                          on_change=_save_on_change, args=(f"tags_{sel_idx}", "DistributionTags", sel_idx))
-            st.caption(f"Available: {', '.join(AVAILABLE_TAGS)}")
+            current_tags_str = str(row.get("DistributionTags", ""))
+            if current_tags_str in ("", "nan", "None"):
+                current_tags_list = []
+            else:
+                current_tags_list = [t.strip() for t in current_tags_str.split(";") if t.strip()]
+
+            def _save_tags(tag_key, row_idx):
+                """Save selected tags back to sheet as semicolon-separated."""
+                selected = st.session_state[tag_key]
+                save_field(row_idx, "DistributionTags", "; ".join(selected))
+
+            st.multiselect(
+                "Select tags",
+                options=AVAILABLE_TAGS,
+                default=current_tags_list,
+                key=f"tags_{sel_idx}",
+                label_visibility="collapsed",
+                on_change=_save_tags,
+                args=(f"tags_{sel_idx}", sel_idx),
+            )
 
             # ── Editable Contact Fields (auto-save on Enter) ──
             st.markdown("**Edit Contact Info**")
