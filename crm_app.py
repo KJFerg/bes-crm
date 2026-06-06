@@ -120,7 +120,15 @@ def load_data():
         df = conn.read(worksheet="Contacts", ttl=300)
         if df is None or df.empty:
             return pd.DataFrame()
-        # Fill NaN with empty strings for display
+        # Force text columns to string to prevent float64 inference on sparse columns
+        text_cols = ["Notes", "Phone1", "Phone2", "Email1", "Email2", "Email3",
+                     "FirstName", "LastName", "Positions", "Industry", "Location",
+                     "City", "State", "Sources", "DistributionTags", "Education",
+                     "LinkedInURL"]
+        for col in text_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(str).replace({"nan": "", "None": ""})
+        # Fill remaining NaN with empty strings for display
         df = df.fillna("")
         return df
     except Exception as e:
@@ -128,14 +136,46 @@ def load_data():
         return pd.DataFrame()
 
 
+def save_field(row_index, field_name, new_value):
+    """Update a single field for a contact in Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Contacts", ttl=0)
+        # Force all text columns to string to prevent dtype errors
+        text_cols = ["Notes", "Phone1", "Phone2", "Email1", "Email2", "Email3",
+                     "FirstName", "LastName", "Positions", "Industry", "Location",
+                     "City", "State", "Sources", "DistributionTags", "Education",
+                     "LinkedInURL"]
+        for col in text_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(str).replace({"nan": "", "None": ""})
+        df.fillna("", inplace=True)
+        df.at[row_index, field_name] = new_value
+        conn.update(worksheet="Contacts", data=df)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Could not save {field_name}: {e}")
+        return False
+
+
 def save_note(row_index, new_note):
     """Append a note to a contact's Notes field in Google Sheets."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Contacts", ttl=0)
+        # Force text columns to string to prevent dtype errors
+        text_cols = ["Notes", "Phone1", "Phone2", "Email1", "Email2", "Email3",
+                     "FirstName", "LastName", "Positions", "Industry", "Location",
+                     "City", "State", "Sources", "DistributionTags", "Education",
+                     "LinkedInURL"]
+        for col in text_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(str).replace({"nan": "", "None": ""})
+        df.fillna("", inplace=True)
         timestamp = datetime.now().strftime("%Y-%m-%d")
         note_entry = f"[{timestamp}] {new_note}"
-        existing = str(df.at[row_index, "Notes"]) if pd.notna(df.at[row_index, "Notes"]) else ""
+        existing = str(df.at[row_index, "Notes"]) if df.at[row_index, "Notes"] else ""
         df.at[row_index, "Notes"] = f"{existing} || {note_entry}" if existing else note_entry
         conn.update(worksheet="Contacts", data=df)
         st.cache_data.clear()
@@ -377,18 +417,33 @@ for idx, row in page_df.iterrows():
                     st.rerun()
 
         with detail_right:
-            # Contact info
-            if row.get("Email1"):
-                st.markdown(f"✉️ {row['Email1']}")
-            if row.get("Email2"):
-                st.markdown(f"✉️ {row['Email2']}")
-            if row.get("Email3"):
-                st.markdown(f"✉️ {row['Email3']}")
-            if row.get("Phone1"):
-                st.markdown(f"📞 {row['Phone1']}")
-            if row.get("Phone2"):
-                st.markdown(f"📞 {row['Phone2']}")
+            # ── Editable Contact Fields ──
+            st.markdown("**Contact Info** *(edit & save)*")
 
+            edit_email1 = st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{idx}")
+            edit_email2 = st.text_input("Email 2", value=row.get("Email2", ""), key=f"email2_{idx}")
+            edit_phone1 = st.text_input("Phone", value=row.get("Phone1", ""), key=f"phone1_{idx}")
+
+            # Save button for contact info edits
+            changed = (
+                edit_email1 != row.get("Email1", "") or
+                edit_email2 != row.get("Email2", "") or
+                edit_phone1 != row.get("Phone1", "")
+            )
+            if changed:
+                if st.button("💾 Save Changes", key=f"save_{idx}"):
+                    ok = True
+                    if edit_email1 != row.get("Email1", ""):
+                        ok = ok and save_field(idx, "Email1", edit_email1)
+                    if edit_email2 != row.get("Email2", ""):
+                        ok = ok and save_field(idx, "Email2", edit_email2)
+                    if edit_phone1 != row.get("Phone1", ""):
+                        ok = ok and save_field(idx, "Phone1", edit_phone1)
+                    if ok:
+                        st.success("Saved!")
+                        st.rerun()
+
+            # ── Read-only Info ──
             # Location
             loc_parts = []
             if row.get("City"):
