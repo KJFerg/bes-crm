@@ -339,7 +339,7 @@ if "selected_contact" not in st.session_state:
     st.session_state.selected_contact = None
 
 # ── Two-Panel Layout: List on Left, Detail on Right ──
-list_col, detail_col = st.columns([1, 2])
+list_col, detail_col = st.columns([1, 3])
 
 with list_col:
     st.markdown("##### Results")
@@ -471,11 +471,12 @@ with detail_col:
         # ── Notes (full width below) ──
         st.markdown("---")
         notes = str(row.get("Notes", ""))
-        if notes:
+        if notes and notes not in ("", "nan", "None"):
             st.markdown("**Notes:**")
             for note in notes.split(" || "):
-                if note.strip():
-                    st.markdown(f"> {note.strip()}")
+                clean_note = note.strip()
+                if clean_note and clean_note not in ("nan", "None"):
+                    st.markdown(f"> {clean_note}")
 
         new_note = st.text_input("Add note", key=f"note_{sel_idx}", placeholder="Type a note and press Enter...")
         if new_note:
