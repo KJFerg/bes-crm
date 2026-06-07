@@ -1,0 +1,17 @@
+# ─── Secrets — NEVER commit (public repo) ───
+secrets.toml
+secrets.toml.template
+service-account-key.json
+*.json
+
+# ─── Contact data / PII — keep out of public repo ───
+*.csv
+
+# ─── Python ───
+__pycache__/
+*.pyc
+
+# ─── Scratch / working files ───
+_b1.txt
+_b2.txt
+_head_crm.py
