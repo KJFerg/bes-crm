@@ -437,15 +437,20 @@ with col_stats:
 st.divider()
 
 # ── Add Contact ──
-with st.expander("➕ Add Contact", expanded=False):
+if st.session_state.get("add_done_msg"):
+    st.success(st.session_state.pop("add_done_msg"))
+# A nonce gives the panel + paste button a fresh identity after each add, so
+# the form collapses and the pasted photo clears instead of carrying over.
+_add_nonce = st.session_state.get("add_nonce", 0)
+with st.expander("➕ Add Contact" + ("​" * _add_nonce), expanded=False):
     # Paste photo lives OUTSIDE the form — custom components don't work inside st.form.
     st.caption("Photo (optional): copy from LinkedIn (right-click → Copy image), then Paste.")
-    _add_paste = paste_button("📋 Paste photo", key="add_paste")
+    _add_paste = paste_button("📋 Paste photo", key=f"add_paste_{_add_nonce}")
     if _add_paste.image_data is not None:
         st.session_state["add_photo_img"] = _add_paste.image_data
     if st.session_state.get("add_photo_img") is not None:
         st.image(st.session_state["add_photo_img"], width=96, caption="Will attach to the new contact")
-    with st.form("add_contact_form", clear_on_submit=True):
+    with st.form(f"add_contact_form_{_add_nonce}", clear_on_submit=True):
         ac1, ac2 = st.columns(2)
         with ac1:
             f_first = st.text_input("First name")
@@ -483,8 +488,9 @@ with st.expander("➕ Add Contact", expanded=False):
                     if _add_img is not None:
                         set_photo(_photo_key, pil_thumb_b64(_add_img),
                                   f"{f_first} {f_last}".strip())
-                        st.session_state.pop("add_photo_img", None)
-                    st.success(f"Added {f_first} {f_last}.".strip())
+                    st.session_state.pop("add_photo_img", None)
+                    st.session_state["add_done_msg"] = f"Added {f_first} {f_last}.".strip()
+                    st.session_state["add_nonce"] = _add_nonce + 1
                     st.rerun()
 
 
