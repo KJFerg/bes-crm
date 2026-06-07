@@ -167,11 +167,28 @@ def _prep_df_for_write(df):
     return df
 
 
+# Columns that must be present in a healthy read. Used to abort writes (and to
+# warn on load) if a partial/corrupt read would otherwise clobber good data.
+REQUIRED_COLUMNS = ["FirstName", "LastName", "Email1", "Notes"]
+
+
+def _read_for_write(conn):
+    """Read the sheet for a write operation, aborting if the read looks corrupt
+    or partial — protects against overwriting 40K good rows with a bad read."""
+    df = conn.read(worksheet="Contacts", ttl=0)
+    if df is None or df.empty:
+        raise RuntimeError("Sheet read returned no data — write skipped to protect your data. Please try again.")
+    missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing:
+        raise RuntimeError(f"Sheet read was incomplete (missing {missing}) — write skipped to protect your data. Please try again.")
+    return df
+
+
 def save_field(row_index, field_name, new_value):
     """Update a single field for a contact in Google Sheets."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Contacts", ttl=0)
+        df = _read_for_write(conn)
         df = _prep_df_for_write(df)
         df.at[row_index, field_name] = str(new_value)
         conn.update(worksheet="Contacts", data=df)
@@ -186,7 +203,7 @@ def delete_contact(row_index):
     """Delete a contact row from Google Sheets."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Contacts", ttl=0)
+        df = _read_for_write(conn)
         df = _prep_df_for_write(df)
         df = df.drop(index=row_index).reset_index(drop=True)
         conn.update(worksheet="Contacts", data=df)
@@ -201,7 +218,7 @@ def save_note(row_index, new_note):
     """Append a note to a contact's Notes field in Google Sheets."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Contacts", ttl=0)
+        df = _read_for_write(conn)
         df = _prep_df_for_write(df)
         timestamp = datetime.now().strftime("%Y-%m-%d")
         note_entry = f"[{timestamp}] {new_note}"
@@ -219,7 +236,7 @@ def add_contact(new_data):
     """Append a brand-new contact row to Google Sheets."""
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Contacts", ttl=0)
+        df = _read_for_write(conn)
         df = _prep_df_for_write(df)
         row = {col: "" for col in df.columns}
         for k, v in new_data.items():
@@ -278,6 +295,15 @@ def search_contacts(df, query):
 
 # Load data
 df = load_data()
+
+# Guard: a momentary Google Sheets glitch can return rows without the expected
+# columns. Show a friendly Reload instead of a raw KeyError crash.
+if not df.empty and any(c not in df.columns for c in REQUIRED_COLUMNS):
+    st.warning("The contact data didn't load completely — a momentary Google Sheets glitch.")
+    if st.button("🔄 Reload"):
+        st.cache_data.clear()
+        st.rerun()
+    st.stop()
 
 if df.empty:
     st.warning("No contacts loaded. Check your Google Sheets connection in `.streamlit/secrets.toml`.")
