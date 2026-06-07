@@ -11,8 +11,12 @@ Ken Ferguson | Berkshire Executive Search | May 29, 2026
 
 import streamlit as st
 import pandas as pd
+import io
+import base64
+import uuid
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
+from streamlit_paste_button import paste_image_button as paste_button
 
 # Distribution tags available for contacts
 AVAILABLE_TAGS = [
@@ -190,6 +194,8 @@ def save_field(row_index, field_name, new_value):
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = _read_for_write(conn)
         df = _prep_df_for_write(df)
+        if field_name not in df.columns:
+            df[field_name] = ""
         df.at[row_index, field_name] = str(new_value)
         conn.update(worksheet="Contacts", data=df)
         st.cache_data.clear()
@@ -238,16 +244,107 @@ def add_contact(new_data):
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = _read_for_write(conn)
         df = _prep_df_for_write(df)
+        # ensure any new fields exist as columns
+        for k in new_data:
+            if k not in df.columns:
+                df[k] = ""
         row = {col: "" for col in df.columns}
         for k, v in new_data.items():
-            if k in row:
-                row[k] = str(v)
+            row[k] = str(v)
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
         conn.update(worksheet="Contacts", data=df)
         st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Could not add contact: {e}")
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# PHOTOS — stored in a separate "Photos" worksheet (PhotoKey | Name | Base64)
+# to keep the big 40K Contacts sheet lean. Accessed directly via gspread so we
+# fetch one photo at a time instead of loading thousands of base64 strings.
+# ══════════════════════════════════════════════════════════════════════════
+
+@st.cache_resource
+def _gspread_book():
+    """Open the spreadsheet with gspread using the same service-account creds
+    st-gsheets uses (stored in st.secrets['connections']['gsheets'])."""
+    import gspread
+    from google.oauth2.service_account import Credentials
+    cfg = dict(st.secrets["connections"]["gsheets"])
+    spreadsheet = cfg.get("spreadsheet", "")
+    scopes = ["https://www.googleapis.com/auth/spreadsheets",
+              "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(cfg, scopes=scopes)
+    gc = gspread.authorize(creds)
+    if str(spreadsheet).startswith("http"):
+        return gc.open_by_url(spreadsheet)
+    return gc.open_by_key(spreadsheet)
+
+
+def _photos_ws(create=False):
+    book = _gspread_book()
+    try:
+        return book.worksheet("Photos")
+    except Exception:
+        if not create:
+            return None
+        ws = book.add_worksheet(title="Photos", rows=100, cols=3)
+        ws.update("A1:C1", [["PhotoKey", "Name", "Base64"]])
+        return ws
+
+
+def photo_key_for_row(row):
+    """A contact's photo key: explicit PhotoKey, else CrelateId."""
+    for col in ("PhotoKey", "CrelateId"):
+        v = str(row.get(col, "")).strip()
+        if v and v not in ("nan", "None"):
+            return v
+    return ""
+
+
+@st.cache_data(ttl=600)
+def get_photo_b64(key):
+    """Fetch one contact's base64 photo from the Photos tab (cached)."""
+    if not key:
+        return None
+    try:
+        ws = _photos_ws()
+        if ws is None:
+            return None
+        cell = ws.find(str(key), in_column=1)
+        if not cell:
+            return None
+        return ws.cell(cell.row, 3).value
+    except Exception:
+        return None
+
+
+def pil_thumb_b64(im, max_dim=200, quality=72):
+    """Resize a PIL image to a small JPEG thumbnail, return base64."""
+    im = im.convert("RGB")
+    im.thumbnail((max_dim, max_dim))
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=quality)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def set_photo(key, b64, name=""):
+    """Upsert a photo row in the Photos tab keyed by PhotoKey."""
+    try:
+        ws = _photos_ws(create=True)
+        cell = ws.find(str(key), in_column=1)
+        if cell:
+            ws.update_cell(cell.row, 3, b64)
+            if name:
+                ws.update_cell(cell.row, 2, name)
+        else:
+            ws.append_row([str(key), name, b64], value_input_option="RAW")
+        get_photo_b64.clear()
+        return True
+    except Exception as e:
+        st.error(f"Could not save photo: {e}")
         return False
 
 
@@ -341,6 +438,13 @@ st.divider()
 
 # ── Add Contact ──
 with st.expander("➕ Add Contact", expanded=False):
+    # Paste photo lives OUTSIDE the form — custom components don't work inside st.form.
+    st.caption("Photo (optional): copy from LinkedIn (right-click → Copy image), then Paste.")
+    _add_paste = paste_button("📋 Paste photo", key="add_paste")
+    if _add_paste.image_data is not None:
+        st.session_state["add_photo_img"] = _add_paste.image_data
+    if st.session_state.get("add_photo_img") is not None:
+        st.image(st.session_state["add_photo_img"], width=96, caption="Will attach to the new contact")
     with st.form("add_contact_form", clear_on_submit=True):
         ac1, ac2 = st.columns(2)
         with ac1:
@@ -362,6 +466,8 @@ with st.expander("➕ Add Contact", expanded=False):
                 st.warning("Enter at least a name or a LinkedIn URL.")
             else:
                 _today = datetime.now().strftime("%Y-%m-%d")
+                _add_img = st.session_state.get("add_photo_img")
+                _photo_key = uuid.uuid4().hex if _add_img is not None else ""
                 _new = {
                     "FirstName": f_first.strip(), "LastName": f_last.strip(),
                     "LinkedInURL": f_url.strip(), "Positions": f_pos.strip(),
@@ -371,8 +477,13 @@ with st.expander("➕ Add Contact", expanded=False):
                     "DistributionTags": "; ".join(f_tags),
                     "Notes": (f"[{_today}] {f_note.strip()}" if f_note.strip() else ""),
                     "CreatedDate": _today,
+                    "PhotoKey": _photo_key,
                 }
                 if add_contact(_new):
+                    if _add_img is not None:
+                        set_photo(_photo_key, pil_thumb_b64(_add_img),
+                                  f"{f_first} {f_last}".strip())
+                        st.session_state.pop("add_photo_img", None)
                     st.success(f"Added {f_first} {f_last}.".strip())
                     st.rerun()
 
@@ -545,6 +656,22 @@ with detail_col:
             )
 
         with main_area:
+            # ── Photo ──
+            pkey = photo_key_for_row(row)
+            existing_b64 = get_photo_b64(pkey) if pkey else None
+            if existing_b64:
+                st.image(base64.b64decode(existing_b64), width=96)
+            with st.popover("📷 Add / update photo"):
+                st.caption("Copy a photo (right-click → Copy image), then click Paste.")
+                paste_res = paste_button("📋 Paste photo", key=f"paste_{sel_idx}")
+                if paste_res.image_data is not None:
+                    key = pkey or uuid.uuid4().hex
+                    if not pkey:
+                        save_field(sel_idx, "PhotoKey", key)
+                    if set_photo(key, pil_thumb_b64(paste_res.image_data), name):
+                        st.success("Photo saved!")
+                        st.rerun()
+
             # ── Header: Name, Title, Location ──
             loc_parts = []
             if row.get("City"):
