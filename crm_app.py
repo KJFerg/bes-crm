@@ -215,6 +215,25 @@ def save_note(row_index, new_note):
         return False
 
 
+def add_contact(new_data):
+    """Append a brand-new contact row to Google Sheets."""
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Contacts", ttl=0)
+        df = _prep_df_for_write(df)
+        row = {col: "" for col in df.columns}
+        for k, v in new_data.items():
+            if k in row:
+                row[k] = str(v)
+        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        conn.update(worksheet="Contacts", data=df)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Could not add contact: {e}")
+        return False
+
+
 def parse_current_position(positions_str):
     """Extract the most recent position for display."""
     if not positions_str:
@@ -293,6 +312,44 @@ with col_stats:
         st.markdown(f'<div class="stat-box"><div class="stat-number">{has_notes:,}</div><div class="stat-label">With Notes</div></div>', unsafe_allow_html=True)
 
 st.divider()
+
+# ── Add Contact ──
+with st.expander("➕ Add Contact", expanded=False):
+    with st.form("add_contact_form", clear_on_submit=True):
+        ac1, ac2 = st.columns(2)
+        with ac1:
+            f_first = st.text_input("First name")
+            f_last = st.text_input("Last name")
+            f_url = st.text_input("LinkedIn URL")
+            f_pos = st.text_input("Title / Company", placeholder="e.g. CIO at Acme")
+            f_city = st.text_input("City")
+            f_state = st.text_input("State")
+        with ac2:
+            f_email = st.text_input("Email")
+            f_phone = st.text_input("Phone")
+            f_source = st.text_input("Source", value="Manual")
+            f_tags = st.multiselect("Tags", options=AVAILABLE_TAGS)
+            f_note = st.text_area("Note", placeholder="What to remember about this person / interaction")
+        submitted = st.form_submit_button("Add Contact", type="primary")
+        if submitted:
+            if not (f_first.strip() or f_last.strip() or f_url.strip()):
+                st.warning("Enter at least a name or a LinkedIn URL.")
+            else:
+                _today = datetime.now().strftime("%Y-%m-%d")
+                _new = {
+                    "FirstName": f_first.strip(), "LastName": f_last.strip(),
+                    "LinkedInURL": f_url.strip(), "Positions": f_pos.strip(),
+                    "City": f_city.strip(), "State": f_state.strip(),
+                    "Email1": f_email.strip(), "Phone1": f_phone.strip(),
+                    "Sources": f_source.strip(), "SourceDetail": f_source.strip(),
+                    "DistributionTags": "; ".join(f_tags),
+                    "Notes": (f"[{_today}] {f_note.strip()}" if f_note.strip() else ""),
+                    "CreatedDate": _today,
+                }
+                if add_contact(_new):
+                    st.success(f"Added {f_first} {f_last}.".strip())
+                    st.rerun()
+
 
 # ── Search and Filters ──
 search_col, filter_col1, filter_col2 = st.columns([3, 1.5, 1.5])
