@@ -12,6 +12,7 @@ Ken Ferguson | Berkshire Executive Search | May 29, 2026
 import streamlit as st
 import pandas as pd
 import io
+import re
 import base64
 import uuid
 from datetime import datetime
@@ -476,6 +477,55 @@ def merge_records(keeper_idx, dup_idx):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# LEADS — pipeline view (at-a-glance grid of everyone with an action tag)
+# ══════════════════════════════════════════════════════════════════════════
+PIPELINE_TAGS = [
+    "Looking",
+    "Sent Strategy Link",
+    "Sent Strategy Link (2 Options)",
+    "Intro Summit/Parliament",
+    "PersonaWise Review",
+    "Paid Consult",
+    "Sent CC Proposal",
+    "Pro Bono Session",
+]
+
+
+def _last_note_date(notes):
+    dates = re.findall(r"\[(\d{4}-\d{2}-\d{2})\]", str(notes))
+    return max(dates) if dates else ""
+
+
+def build_leads(df, tag_filter="All pipeline stages"):
+    rows = []
+    for _idx, r in df.iterrows():
+        tags = [t.strip() for t in str(r.get("DistributionTags", "")).split(";") if t.strip()]
+        pipe = [t for t in tags if t in PIPELINE_TAGS]
+        if not pipe:
+            continue
+        if tag_filter != "All pipeline stages" and tag_filter not in pipe:
+            continue
+        title, company = parse_current_position(r.get("Positions", ""))
+        name = f"{r.get('FirstName','')} {r.get('LastName','')}".strip()
+        loc = ", ".join([x for x in [str(r.get("City", "")).strip(), str(r.get("State", "")).strip()]
+                         if x and x not in ("nan", "None")])
+        url = str(r.get("LinkedInURL", ""))
+        rows.append({
+            "Name": name,
+            "Title": title,
+            "Company": company,
+            "Status": ", ".join(pipe),
+            "Last Note": _last_note_date(r.get("Notes", "")),
+            "Location": loc,
+            "LinkedIn": url if url not in ("nan", "None") else "",
+        })
+    leads = pd.DataFrame(rows)
+    if not leads.empty:
+        leads = leads.sort_values("Last Note", ascending=False).reset_index(drop=True)
+    return leads
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # MAIN APP
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -528,6 +578,41 @@ with col_stats:
         st.markdown(f'<div class="stat-box"><div class="stat-number">{has_notes:,}</div><div class="stat-label">With Notes</div></div>', unsafe_allow_html=True)
 
 st.divider()
+
+# ── View toggle: Contacts (search + detail) or Leads (pipeline grid) ──
+view = st.radio("View", ["📇 Contacts", "📋 Leads"], horizontal=True,
+                label_visibility="collapsed", key="view_mode")
+
+if view == "📋 Leads":
+    f1, f2 = st.columns([2, 1])
+    with f1:
+        lead_tag = st.selectbox("Pipeline stage", ["All pipeline stages"] + PIPELINE_TAGS,
+                                label_visibility="collapsed")
+    leads_df = build_leads(df, lead_tag)
+    with f2:
+        st.markdown(f"<div style='text-align:right;padding-top:6px;'><b>{len(leads_df):,}</b> leads</div>",
+                    unsafe_allow_html=True)
+    if leads_df.empty:
+        st.info("No leads with a pipeline tag yet. Tag a contact (Looking, Sent Strategy Link, "
+                "Pro Bono Session, etc.) in the Contacts view and they'll show up here.")
+    else:
+        st.dataframe(
+            leads_df, use_container_width=True, hide_index=True, height=560,
+            column_config={
+                "LinkedIn": st.column_config.LinkColumn("LinkedIn", display_text="Profile"),
+            },
+        )
+        st.download_button(
+            "📥 Download leads CSV",
+            leads_df.to_csv(index=False).encode("utf-8"),
+            f"bes_leads_{datetime.now().strftime('%Y%m%d')}.csv",
+            "text/csv",
+        )
+    if st.button("🔄 Reload data", key="leads_reload"):
+        st.cache_data.clear()
+        st.session_state.df = load_data()
+        st.rerun()
+    st.stop()
 
 # ── Add Contact ──
 if st.session_state.get("add_done_msg"):
