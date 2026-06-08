@@ -236,6 +236,15 @@ def save_note(row_index, new_note):
         col = _col_num("Notes")
         rownum = row_index + 2
         existing = ws.cell(rownum, col).value or ""
+        # Idempotency: if the most recent note is the same text, treat as already
+        # saved (prevents accidental double-entry from a missed visual confirm).
+        if existing:
+            last = existing.split(" || ")[-1].strip()
+            last_text = last.split("]", 1)[1].strip() if last.startswith("[") and "]" in last else last
+            if last_text == new_note.strip():
+                if "df" in st.session_state and row_index in st.session_state.df.index:
+                    st.session_state.df.at[row_index, "Notes"] = existing
+                return True
         entry = f"[{datetime.now().strftime('%Y-%m-%d')}] {new_note}"
         combined = f"{existing} || {entry}" if existing else entry
         ws.update_cell(rownum, col, combined)
@@ -874,35 +883,42 @@ with detail_col:
                          disabled=True, key=f"notes_display_{sel_idx}",
                          label_visibility="collapsed")
 
-        # ── Merge a duplicate into this record ──
-        with st.popover("🔗 Merge a duplicate into this record"):
-            st.caption("Keep THIS record as the survivor. Find the duplicate; its "
-                       "notes, tags, emails, phones, and newer job are combined here, "
-                       "then the duplicate row is deleted.")
-            dq = st.text_input("Find the duplicate", key=f"mergeq_{sel_idx}",
-                               placeholder="name…")
-            if dq:
-                cands = search_contacts(df, dq)
-                cands = cands[cands.index != sel_idx]
-                opts = {}
-                for cidx, crow in cands.head(15).iterrows():
-                    _t, _co = parse_current_position(crow.get("Positions", ""))
-                    cnm = f"{crow.get('FirstName','')} {crow.get('LastName','')}".strip()
-                    opts[f"{cnm} — {_co or _t}  ·  row {cidx}"] = cidx
-                if opts:
-                    pick = st.selectbox("Duplicate record", list(opts.keys()),
-                                        key=f"mergepick_{sel_idx}")
-                    if st.button("Merge & delete duplicate", key=f"mergego_{sel_idx}",
-                                 type="primary"):
-                        if merge_records(sel_idx, opts[pick]):
-                            st.session_state.selected_contact = None
-                            st.success("Merged — reselect the record to view the result.")
-                            st.rerun()
-                else:
-                    st.write("No other matching records.")
-
-        # ── Delete Contact ──
+        # ── Record actions: Merge + Delete side by side ──
         st.markdown("")  # spacer
+        merge_col, delete_col, _spacer = st.columns([1.4, 1, 2])
+        with merge_col:
+            with st.popover("🔗 Merge duplicate"):
+                st.caption("Keep THIS record as the survivor. Find the duplicate; its "
+                           "notes, tags, emails, phones, and newer job are combined here, "
+                           "then the duplicate row is deleted.")
+                dq = st.text_input("Find the duplicate", key=f"mergeq_{sel_idx}",
+                                   placeholder="name…")
+                if dq:
+                    cands = search_contacts(df, dq)
+                    cands = cands[cands.index != sel_idx]
+                    opts = {}
+                    for cidx, crow in cands.head(15).iterrows():
+                        _t, _co = parse_current_position(crow.get("Positions", ""))
+                        cnm = f"{crow.get('FirstName','')} {crow.get('LastName','')}".strip()
+                        opts[f"{cnm} — {_co or _t}  ·  row {cidx}"] = cidx
+                    if opts:
+                        pick = st.selectbox("Duplicate record", list(opts.keys()),
+                                            key=f"mergepick_{sel_idx}")
+                        if st.button("Merge & delete duplicate", key=f"mergego_{sel_idx}",
+                                     type="primary"):
+                            if merge_records(sel_idx, opts[pick]):
+                                st.session_state.selected_contact = None
+                                st.success("Merged — reselect the record to view the result.")
+                                st.rerun()
+                    else:
+                        st.write("No other matching records.")
+        with delete_col:
+            if not st.session_state.get(f"confirm_delete_{sel_idx}"):
+                if st.button("🗑️ Delete", key=f"delete_{sel_idx}"):
+                    st.session_state[f"confirm_delete_{sel_idx}"] = True
+                    st.rerun()
+
+        # Delete confirmation (full width, below the action row)
         if st.session_state.get(f"confirm_delete_{sel_idx}"):
             st.warning(f"Permanently delete **{name}**? This cannot be undone.")
             confirm_col, cancel_col, _ = st.columns([1, 1, 3])
@@ -916,10 +932,6 @@ with detail_col:
                 if st.button("Cancel", key=f"cancel_delete_{sel_idx}"):
                     st.session_state.pop(f"confirm_delete_{sel_idx}", None)
                     st.rerun()
-        else:
-            if st.button("🗑️ Delete Contact", key=f"delete_{sel_idx}"):
-                st.session_state[f"confirm_delete_{sel_idx}"] = True
-                st.rerun()
 
     else:
         st.markdown("*Select a contact from the list to view details.*")
