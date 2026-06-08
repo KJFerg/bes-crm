@@ -409,6 +409,63 @@ def search_contacts(df, query):
     return df[mask]
 
 
+def _clean(v):
+    v = str(v).strip()
+    return "" if v in ("nan", "None") else v
+
+
+def _union_list(a, b, sep):
+    out = []
+    for x in [p.strip() for p in (a.split(sep) + b.split(sep)) if p.strip()]:
+        if x not in out:
+            out.append(x)
+    return out
+
+
+def merge_records(keeper_idx, dup_idx):
+    """Merge the duplicate row into the keeper row (union of data), then delete
+    the duplicate. Keeper survives with combined notes/tags/emails; the dup's
+    positions are appended so its (newer) job becomes the current one."""
+    try:
+        df = st.session_state.df
+        k, d = df.loc[keeper_idx], df.loc[dup_idx]
+        updates = {}
+        updates["Notes"] = " || ".join(_union_list(_clean(k.get("Notes", "")), _clean(d.get("Notes", "")), " || "))
+        updates["DistributionTags"] = "; ".join(_union_list(_clean(k.get("DistributionTags", "")), _clean(d.get("DistributionTags", "")), ";"))
+        # keeper positions first, dup after → dup's newer role lands last (=current)
+        updates["Positions"] = " | ".join(_union_list(_clean(k.get("Positions", "")), _clean(d.get("Positions", "")), " | "))
+        updates["Education"] = " | ".join(_union_list(_clean(k.get("Education", "")), _clean(d.get("Education", "")), " | "))
+        # emails (3 slots) and phones (2 slots): unique, keeper first
+        emails = []
+        for col in ["Email1", "Email2", "Email3"]:
+            for r in (k, d):
+                e = _clean(r.get(col, ""))
+                if e and e.lower() not in [x.lower() for x in emails]:
+                    emails.append(e)
+        for i, col in enumerate(["Email1", "Email2", "Email3"]):
+            updates[col] = emails[i] if i < len(emails) else ""
+        phones = []
+        for col in ["Phone1", "Phone2"]:
+            for r in (k, d):
+                p = _clean(r.get(col, ""))
+                if p and p not in phones:
+                    phones.append(p)
+        for i, col in enumerate(["Phone1", "Phone2"]):
+            updates[col] = phones[i] if i < len(phones) else ""
+        # single-value fields: keep keeper's if present, else take dup's
+        for col in ["LinkedInURL", "City", "State", "Location", "Industry",
+                    "Website", "Twitter", "CrelateId", "PhotoKey", "Sources", "SourceDetail"]:
+            updates[col] = _clean(k.get(col, "")) or _clean(d.get(col, ""))
+        # write merged fields to keeper, then delete the duplicate row
+        for col, val in updates.items():
+            save_field(keeper_idx, col, val)
+        delete_contact(dup_idx)
+        return True
+    except Exception as e:
+        st.error(f"Merge failed: {e}")
+        return False
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # MAIN APP
 # ══════════════════════════════════════════════════════════════════════════
@@ -816,6 +873,32 @@ with detail_col:
             st.text_area("Previous notes", value=notes_display, height=200,
                          disabled=True, key=f"notes_display_{sel_idx}",
                          label_visibility="collapsed")
+
+        # ── Merge a duplicate into this record ──
+        with st.popover("🔗 Merge a duplicate into this record"):
+            st.caption("Keep THIS record as the survivor. Find the duplicate; its "
+                       "notes, tags, emails, phones, and newer job are combined here, "
+                       "then the duplicate row is deleted.")
+            dq = st.text_input("Find the duplicate", key=f"mergeq_{sel_idx}",
+                               placeholder="name…")
+            if dq:
+                cands = search_contacts(df, dq)
+                cands = cands[cands.index != sel_idx]
+                opts = {}
+                for cidx, crow in cands.head(15).iterrows():
+                    _t, _co = parse_current_position(crow.get("Positions", ""))
+                    cnm = f"{crow.get('FirstName','')} {crow.get('LastName','')}".strip()
+                    opts[f"{cnm} — {_co or _t}  ·  row {cidx}"] = cidx
+                if opts:
+                    pick = st.selectbox("Duplicate record", list(opts.keys()),
+                                        key=f"mergepick_{sel_idx}")
+                    if st.button("Merge & delete duplicate", key=f"mergego_{sel_idx}",
+                                 type="primary"):
+                        if merge_records(sel_idx, opts[pick]):
+                            st.success("Merged.")
+                            st.rerun()
+                else:
+                    st.write("No other matching records.")
 
         # ── Delete Contact ──
         st.markdown("")  # spacer
