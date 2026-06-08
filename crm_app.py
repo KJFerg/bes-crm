@@ -188,72 +188,94 @@ def _read_for_write(conn):
     return df
 
 
+@st.cache_resource
+def _contacts_ws():
+    """The Contacts worksheet via gspread — for fast TARGETED cell/row ops."""
+    return _gspread_book().worksheet("Contacts")
+
+
+@st.cache_data(ttl=600)
+def _contacts_header():
+    return _contacts_ws().row_values(1)
+
+
+def _col_num(field_name):
+    """1-based column number for a field, or None if absent."""
+    header = _contacts_header()
+    return header.index(field_name) + 1 if field_name in header else None
+
+
+# row_index is the 0-based position from load_data(); sheet row = row_index + 2
+# (row 1 = header). All writes below are TARGETED single-cell/row gspread ops, so
+# we never read or rewrite the whole 40K sheet — fast, and can't clobber the data.
+
 def save_field(row_index, field_name, new_value):
-    """Update a single field for a contact in Google Sheets."""
+    """Update a single cell for a contact."""
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = _read_for_write(conn)
-        df = _prep_df_for_write(df)
-        if field_name not in df.columns:
-            df[field_name] = ""
-        df.at[row_index, field_name] = str(new_value)
-        conn.update(worksheet="Contacts", data=df)
-        st.cache_data.clear()
+        ws = _contacts_ws()
+        col = _col_num(field_name)
+        if col is None:  # field not yet a column — add it at the end
+            col = len(_contacts_header()) + 1
+            ws.update_cell(1, col, field_name)
+            _contacts_header.clear()
+        ws.update_cell(row_index + 2, col, str(new_value))
+        if "df" in st.session_state and row_index in st.session_state.df.index:
+            if field_name not in st.session_state.df.columns:
+                st.session_state.df[field_name] = ""
+            st.session_state.df.at[row_index, field_name] = str(new_value)
         return True
     except Exception as e:
         st.error(f"Could not save {field_name}: {e}")
         return False
 
 
-def delete_contact(row_index):
-    """Delete a contact row from Google Sheets."""
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = _read_for_write(conn)
-        df = _prep_df_for_write(df)
-        df = df.drop(index=row_index).reset_index(drop=True)
-        conn.update(worksheet="Contacts", data=df)
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"Could not delete contact: {e}")
-        return False
-
-
 def save_note(row_index, new_note):
-    """Append a note to a contact's Notes field in Google Sheets."""
+    """Append a note via a single-cell read + write (no whole-sheet rewrite)."""
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = _read_for_write(conn)
-        df = _prep_df_for_write(df)
-        timestamp = datetime.now().strftime("%Y-%m-%d")
-        note_entry = f"[{timestamp}] {new_note}"
-        existing = df.at[row_index, "Notes"]
-        df.at[row_index, "Notes"] = f"{existing} || {note_entry}" if existing else note_entry
-        conn.update(worksheet="Contacts", data=df)
-        st.cache_data.clear()
+        ws = _contacts_ws()
+        col = _col_num("Notes")
+        rownum = row_index + 2
+        existing = ws.cell(rownum, col).value or ""
+        entry = f"[{datetime.now().strftime('%Y-%m-%d')}] {new_note}"
+        combined = f"{existing} || {entry}" if existing else entry
+        ws.update_cell(rownum, col, combined)
+        if "df" in st.session_state and row_index in st.session_state.df.index:
+            st.session_state.df.at[row_index, "Notes"] = combined
         return True
     except Exception as e:
         st.error(f"Could not save note: {e}")
         return False
 
 
-def add_contact(new_data):
-    """Append a brand-new contact row to Google Sheets."""
+def delete_contact(row_index):
+    """Delete a single row via gspread, then reload (row numbers shift)."""
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = _read_for_write(conn)
-        df = _prep_df_for_write(df)
-        # ensure any new fields exist as columns
-        for k in new_data:
-            if k not in df.columns:
-                df[k] = ""
-        row = {col: "" for col in df.columns}
-        for k, v in new_data.items():
-            row[k] = str(v)
-        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-        conn.update(worksheet="Contacts", data=df)
+        ws = _contacts_ws()
+        ws.delete_rows(row_index + 2)
         st.cache_data.clear()
+        st.session_state.df = load_data()
+        return True
+    except Exception as e:
+        st.error(f"Could not delete contact: {e}")
+        return False
+
+
+def add_contact(new_data):
+    """Append a new contact row via gspread, then reload."""
+    try:
+        ws = _contacts_ws()
+        header = list(_contacts_header())
+        added = False
+        for k in new_data:
+            if k not in header:
+                header.append(k)
+                ws.update_cell(1, len(header), k)
+                added = True
+        if added:
+            _contacts_header.clear()
+        ws.append_row([str(new_data.get(c, "")) for c in header], value_input_option="RAW")
+        st.cache_data.clear()
+        st.session_state.df = load_data()
         return True
     except Exception as e:
         st.error(f"Could not add contact: {e}")
@@ -391,7 +413,10 @@ def search_contacts(df, query):
 # ══════════════════════════════════════════════════════════════════════════
 
 # Load data
-df = load_data()
+# Held in session so targeted single-cell edits don't trigger a 40K-row reload.
+if "df" not in st.session_state:
+    st.session_state.df = load_data()
+df = st.session_state.df
 
 # Guard: a momentary Google Sheets glitch can return rows without the expected
 # columns. Show a friendly Reload instead of a raw KeyError crash.
@@ -399,6 +424,7 @@ if not df.empty and any(c not in df.columns for c in REQUIRED_COLUMNS):
     st.warning("The contact data didn't load completely — a momentary Google Sheets glitch.")
     if st.button("🔄 Reload"):
         st.cache_data.clear()
+        st.session_state.df = load_data()
         st.rerun()
     st.stop()
 
@@ -755,10 +781,14 @@ with detail_col:
                 stats_line += f"&emsp;|&emsp;{email_count} emails"
         st.markdown(stats_line, unsafe_allow_html=True)
 
-        # Add new note
-        new_note = st.text_input("Add note", key=f"note_{sel_idx}", placeholder="Type a note and press Enter...")
+        # Add new note. A per-contact nonce gives the input a fresh key after each
+        # save, so it clears and CANNOT re-fire on rerun (was creating duplicates).
+        _nnonce = st.session_state.get(f"note_nonce_{sel_idx}", 0)
+        new_note = st.text_input("Add note", key=f"note_{sel_idx}_{_nnonce}",
+                                 placeholder="Type a note and press Enter...")
         if new_note:
             if save_note(sel_idx, new_note):
+                st.session_state[f"note_nonce_{sel_idx}"] = _nnonce + 1
                 st.success("Note saved!")
                 st.rerun()
 
@@ -817,6 +847,11 @@ if total_pages > 1:
 
 # ── Sidebar: Export ──
 with st.sidebar:
+    if st.button("🔄 Reload data"):
+        st.cache_data.clear()
+        st.session_state.df = load_data()
+        st.rerun()
+
     st.markdown("### Export")
     if not filtered.empty:
         csv = filtered.to_csv(index=False).encode("utf-8")
