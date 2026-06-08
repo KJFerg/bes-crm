@@ -377,34 +377,35 @@ def parse_current_position(positions_str):
     # Last position is most recent (We-Connect or LinkedIn latest)
     parts = str(positions_str).split(" | ")
     latest = parts[-1] if parts else ""
-    # Strip source tag
-    for tag in ["(Crelate)", "(LinkedIn export Mar 2026)", "(We-Connect)", "(Interim)"]:
-        latest = latest.replace(tag, "").strip()
+    # Strip any trailing source/date tag like "(Crelate)" or "(Updated 2026-06-08)"
+    latest = latest.strip()
+    if latest.endswith(")") and " (" in latest:
+        latest = latest[:latest.rfind(" (")].strip()
     if " @ " in latest:
         title, company = latest.split(" @ ", 1)
         return title.strip(), company.strip()
     return latest.strip(), ""
 
 
+_SEARCH_FIELDS = ["FirstName", "LastName", "Positions", "Email1", "Email2",
+                  "Notes", "Industry", "Location", "City", "State",
+                  "DistributionTags", "Education"]
+
+
 def search_contacts(df, query):
-    """Search across name, company, title, email, notes, location."""
-    if not query:
+    """Token-based search: every word in the query must appear somewhere across
+    the searchable fields. So 'michael morgan' matches a row with FirstName
+    Michael AND LastName Morgan, and 'morgan new york' narrows further."""
+    tokens = [t for t in str(query).lower().split() if t]
+    if not tokens:
         return df
-    q = query.lower()
-    mask = (
-        df["FirstName"].str.lower().str.contains(q, na=False) |
-        df["LastName"].str.lower().str.contains(q, na=False) |
-        df["Positions"].str.lower().str.contains(q, na=False) |
-        df["Email1"].str.lower().str.contains(q, na=False) |
-        df["Email2"].str.lower().str.contains(q, na=False) |
-        df["Notes"].str.lower().str.contains(q, na=False) |
-        df["Industry"].str.lower().str.contains(q, na=False) |
-        df["Location"].str.lower().str.contains(q, na=False) |
-        df["City"].str.lower().str.contains(q, na=False) |
-        df["State"].str.lower().str.contains(q, na=False) |
-        df["DistributionTags"].str.lower().str.contains(q, na=False) |
-        df["Education"].str.lower().str.contains(q, na=False)
-    )
+    present = [f for f in _SEARCH_FIELDS if f in df.columns]
+    blob = df[present[0]].astype(str).str.lower()
+    for f in present[1:]:
+        blob = blob.str.cat(df[f].astype(str).str.lower(), sep=" ")
+    mask = pd.Series(True, index=df.index)
+    for tok in tokens:
+        mask &= blob.str.contains(tok, na=False, regex=False)
     return df[mask]
 
 
@@ -727,6 +728,23 @@ with detail_col:
                 with st.popover("📋 Position History"):
                     for pos in reversed(positions.split(" | ")):
                         st.markdown(f"- {pos}")
+
+            # Update current role — appends a new current position (keeps history)
+            with st.popover("✏️ Update current role"):
+                ur_title = st.text_input("New title", key=f"urtitle_{sel_idx}")
+                ur_co = st.text_input("New company", key=f"urco_{sel_idx}")
+                if st.button("Save current role", key=f"ursave_{sel_idx}"):
+                    if ur_title.strip() or ur_co.strip():
+                        _new_pos = f"{ur_title.strip()} @ {ur_co.strip()}".strip(" @")
+                        _today = datetime.now().strftime("%Y-%m-%d")
+                        _entry = f"{_new_pos} (Updated {_today})"
+                        _existing = str(row.get("Positions", "")).strip()
+                        _combined = f"{_existing} | {_entry}" if _existing else _entry
+                        if save_field(sel_idx, "Positions", _combined):
+                            st.success("Updated.")
+                            st.rerun()
+                    else:
+                        st.warning("Enter a title and/or company.")
 
             education = str(row.get("Education", ""))
             if education:
