@@ -762,12 +762,16 @@ with detail_col:
                 st.image(base64.b64decode(existing_b64), width=96)
             with st.popover("📷 Add / update photo"):
                 st.caption("Copy a photo (right-click → Copy image), then click Paste.")
-                paste_res = paste_button("📋 Paste photo", key=f"paste_{sel_idx}")
+                # Nonce in the key remounts the paste button after a save, so it
+                # stops re-handing the same image (was looping "running photo…").
+                _pnonce = st.session_state.get(f"paste_nonce_{sel_idx}", 0)
+                paste_res = paste_button("📋 Paste photo", key=f"paste_{sel_idx}_{_pnonce}")
                 if paste_res.image_data is not None:
                     key = pkey or uuid.uuid4().hex
                     if not pkey:
                         save_field(sel_idx, "PhotoKey", key)
                     if set_photo(key, pil_thumb_b64(paste_res.image_data), name):
+                        st.session_state[f"paste_nonce_{sel_idx}"] = _pnonce + 1
                         st.success("Photo saved!")
                         st.rerun()
 
