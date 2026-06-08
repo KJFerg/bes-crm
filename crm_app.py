@@ -895,7 +895,8 @@ with detail_col:
                     if st.button("Merge & delete duplicate", key=f"mergego_{sel_idx}",
                                  type="primary"):
                         if merge_records(sel_idx, opts[pick]):
-                            st.success("Merged.")
+                            st.session_state.selected_contact = None
+                            st.success("Merged — reselect the record to view the result.")
                             st.rerun()
                 else:
                     st.write("No other matching records.")
