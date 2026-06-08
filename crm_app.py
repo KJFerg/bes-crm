@@ -878,11 +878,13 @@ with detail_col:
                 st.success("Note saved!")
                 st.rerun()
 
-        # Show all notes, most recent first, one per line
+        # Show all notes, most recent first, one per line. Key includes the note
+        # nonce so the box remounts (and shows the new note) right after a save —
+        # a keyed text_area otherwise caches its first value and ignores updates.
         if all_notes:
             notes_display = "\n".join(all_notes)
             st.text_area("Previous notes", value=notes_display, height=200,
-                         disabled=True, key=f"notes_display_{sel_idx}",
+                         disabled=True, key=f"notes_display_{sel_idx}_{_nnonce}",
                          label_visibility="collapsed")
 
         # ── Record actions: Merge + Delete side by side ──
