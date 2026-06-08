@@ -715,20 +715,30 @@ with detail_col:
 
             # ── Contact Info (above Tags) ──
             st.markdown("**Contact Info**")
-            st.text_input("Email 1", value=row.get("Email1", ""), key=f"email1_{sel_idx}",
+
+            def _clean_val(v):
+                v = str(v).lstrip("'")
+                return "" if v in ("nan", "None") else v
+
+            # Email 1 + Email 2 always editable (so a second email can be added)
+            st.text_input("Email 1", value=_clean_val(row.get("Email1", "")),
+                          key=f"email1_{sel_idx}",
                           on_change=_save_on_change, args=(f"email1_{sel_idx}", "Email1", sel_idx))
-            email2_val = str(row.get("Email2", ""))
-            if email2_val and email2_val not in ("", "nan", "None"):
-                st.text_input("Email 2", value=email2_val, key=f"email2_{sel_idx}",
-                              on_change=_save_on_change, args=(f"email2_{sel_idx}", "Email2", sel_idx))
-            phone1_val = str(row.get("Phone1", "")).lstrip("'")
-            if phone1_val and phone1_val not in ("", "nan", "None"):
-                st.text_input("Phone 1", value=phone1_val, key=f"phone1_{sel_idx}",
-                              on_change=_save_on_change, args=(f"phone1_{sel_idx}", "Phone1", sel_idx))
-            phone2_val = str(row.get("Phone2", "")).lstrip("'")
-            if phone2_val and phone2_val not in ("", "nan", "None"):
-                st.text_input("Phone 2", value=phone2_val, key=f"phone2_{sel_idx}",
-                              on_change=_save_on_change, args=(f"phone2_{sel_idx}", "Phone2", sel_idx))
+            st.text_input("Email 2", value=_clean_val(row.get("Email2", "")),
+                          key=f"email2_{sel_idx}", placeholder="second email…",
+                          on_change=_save_on_change, args=(f"email2_{sel_idx}", "Email2", sel_idx))
+            # Email 3 only if already populated (keeps the panel tidy)
+            email3_val = _clean_val(row.get("Email3", ""))
+            if email3_val:
+                st.text_input("Email 3", value=email3_val, key=f"email3_{sel_idx}",
+                              on_change=_save_on_change, args=(f"email3_{sel_idx}", "Email3", sel_idx))
+            # Phone 1 + Phone 2 always editable
+            st.text_input("Phone 1", value=_clean_val(row.get("Phone1", "")),
+                          key=f"phone1_{sel_idx}", placeholder="phone…",
+                          on_change=_save_on_change, args=(f"phone1_{sel_idx}", "Phone1", sel_idx))
+            st.text_input("Phone 2", value=_clean_val(row.get("Phone2", "")),
+                          key=f"phone2_{sel_idx}", placeholder="second phone…",
+                          on_change=_save_on_change, args=(f"phone2_{sel_idx}", "Phone2", sel_idx))
 
             # ── Tags (below Contact Info) ──
             st.markdown("**Tags**")
