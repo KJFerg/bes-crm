@@ -854,7 +854,9 @@ with detail_col:
             if note.startswith("[") and len(note) > 11 and note[5] == "-":
                 return note[1:11]
             return "0000-00-00"
-        all_notes = sorted(all_notes, key=_note_sort_key, reverse=True)
+        # Reverse first so that within the same date (notes only carry a date,
+        # not a time) the most-recently-added note sorts to the top.
+        all_notes = sorted(list(reversed(all_notes)), key=_note_sort_key, reverse=True)
 
         note_count = len(all_notes)
         stats_line = f"**Notes** ({note_count})"
