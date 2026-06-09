@@ -866,6 +866,25 @@ with detail_col:
                 args=(f"tags_{sel_idx}", sel_idx),
             )
 
+            # ── Source (editable) ──
+            st.markdown("**Source**")
+            cur_src = str(row.get("Sources", "")).strip()
+            if cur_src in ("nan", "None"):
+                cur_src = ""
+            src_opts = list(AVAILABLE_SOURCES)
+            if cur_src and cur_src not in src_opts:
+                src_opts = [cur_src] + src_opts  # keep the current value selectable
+
+            def _save_source(skey, row_idx):
+                save_field(row_idx, "Sources", st.session_state[skey])
+
+            st.selectbox(
+                "Source", src_opts,
+                index=(src_opts.index(cur_src) if cur_src in src_opts else 0),
+                key=f"src_{sel_idx}", label_visibility="collapsed",
+                on_change=_save_source, args=(f"src_{sel_idx}", sel_idx),
+            )
+
         with main_area:
             # ── Photo ──
             pkey = photo_key_for_row(row)
