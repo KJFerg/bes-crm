@@ -36,6 +36,7 @@ AVAILABLE_TAGS = [
     "PersonaWise Review",
     "Paid Consult",
     "Pro Bono Session",
+    "30-Minute Free",
     "Looking",
     # ── Cohort / source ──
     "We-Connect Campaign A",
@@ -498,6 +499,7 @@ PIPELINE_TAGS = [
     "Looking",
     "Sent Strategy Link",
     "Sent Strategy Link (2 Options)",
+    "30-Minute Free",
     "Intro Summit/Parliament",
     "PersonaWise Review",
     "Paid Consult",
