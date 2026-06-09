@@ -42,6 +42,21 @@ AVAILABLE_TAGS = [
     "Inbound (outside We-Connect)",
 ]
 
+# Source = how a contact came in (dropdown on the Add Contact form)
+AVAILABLE_SOURCES = [
+    "We-Connect Campaign A",
+    "We-Connect Campaign B",
+    "LinkedIn inbound (they messaged me)",
+    "LinkedIn comment/post engagement",
+    "Referral",
+    "Website inquiry",
+    "Strategy page booking",
+    "Parliament / Summit (Mark Blanke)",
+    "Past client / existing network",
+    "Conference / event",
+    "Search assignment (recruiting)",
+]
+
 # ══════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════════════
@@ -640,7 +655,8 @@ with st.expander("➕ Add Contact" + ("​" * _add_nonce), expanded=False):
         with ac2:
             f_email = st.text_input("Email")
             f_phone = st.text_input("Phone")
-            f_source = st.text_input("Source", value="Manual")
+            f_source = st.selectbox("Source", AVAILABLE_SOURCES, index=0)
+            f_source_custom = st.text_input("Custom source", placeholder="only if not in the list above")
             f_tags = st.multiselect("Tags", options=AVAILABLE_TAGS)
             f_note = st.text_area("Note", placeholder="What to remember about this person / interaction")
         submitted = st.form_submit_button("Add Contact", type="primary")
@@ -656,7 +672,8 @@ with st.expander("➕ Add Contact" + ("​" * _add_nonce), expanded=False):
                     "LinkedInURL": f_url.strip(), "Positions": f_pos.strip(),
                     "City": f_city.strip(), "State": f_state.strip(),
                     "Email1": f_email.strip(), "Phone1": f_phone.strip(),
-                    "Sources": f_source.strip(), "SourceDetail": f_source.strip(),
+                    "Sources": (f_source_custom.strip() or f_source),
+                    "SourceDetail": (f_source_custom.strip() or f_source),
                     "DistributionTags": "; ".join(f_tags),
                     "Notes": (f"[{_today}] {f_note.strip()}" if f_note.strip() else ""),
                     "CreatedDate": _today,
