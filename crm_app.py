@@ -458,8 +458,12 @@ def merge_records(keeper_idx, dup_idx):
         updates = {}
         updates["Notes"] = " || ".join(_union_list(_clean(k.get("Notes", "")), _clean(d.get("Notes", "")), " || "))
         updates["DistributionTags"] = "; ".join(_union_list(_clean(k.get("DistributionTags", "")), _clean(d.get("DistributionTags", "")), ";"))
-        # keeper positions first, dup after → dup's newer role lands last (=current)
-        updates["Positions"] = " | ".join(_union_list(_clean(k.get("Positions", "")), _clean(d.get("Positions", "")), " | "))
+        # KEEPER is authoritative for the current role: its positions stay last
+        # (= current). The duplicate's non-overlapping positions go in front as
+        # older history, so an OLD record can't overwrite the current job.
+        kp = [p.strip() for p in _clean(k.get("Positions", "")).split(" | ") if p.strip()]
+        dp = [p.strip() for p in _clean(d.get("Positions", "")).split(" | ") if p.strip()]
+        updates["Positions"] = " | ".join([p for p in dp if p not in kp] + kp)
         updates["Education"] = " | ".join(_union_list(_clean(k.get("Education", "")), _clean(d.get("Education", "")), " | "))
         # emails (3 slots) and phones (2 slots): unique, keeper first
         emails = []
@@ -480,8 +484,19 @@ def merge_records(keeper_idx, dup_idx):
             updates[col] = phones[i] if i < len(phones) else ""
         # single-value fields: keep keeper's if present, else take dup's
         for col in ["LinkedInURL", "City", "State", "Location", "Industry",
-                    "Website", "Twitter", "CrelateId", "PhotoKey", "Sources", "SourceDetail"]:
+                    "Website", "Twitter", "Sources", "SourceDetail"]:
             updates[col] = _clean(k.get(col, "")) or _clean(d.get(col, ""))
+        # PHOTO: the keeper's photo wins. photo_key_for_row uses PhotoKey, then
+        # CrelateId. Keep the keeper's; only fall back to the duplicate's photo if
+        # the keeper has no photo at all.
+        k_pk, k_cid = _clean(k.get("PhotoKey", "")), _clean(k.get("CrelateId", ""))
+        updates["CrelateId"] = k_cid or _clean(d.get("CrelateId", ""))
+        if k_pk:
+            updates["PhotoKey"] = k_pk                 # keeper has an explicit photo key
+        elif k_cid:
+            updates["PhotoKey"] = ""                   # keeper shows photo via its CrelateId
+        else:
+            updates["PhotoKey"] = _clean(d.get("PhotoKey", ""))   # keeper had none → take dup's
         # write merged fields to keeper, then delete the duplicate row
         for col, val in updates.items():
             save_field(keeper_idx, col, val)
