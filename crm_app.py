@@ -379,12 +379,15 @@ def _wc_enrich_fields(c):
     }
 
 
-def enrich_from_weconnect(max_pages=20):
+def enrich_from_weconnect(max_pages=20, recent_days=30):
     """Fill ONLY the blank Positions/Education/Location/City/State/Industry fields on
     EXISTING CRM records, matched by LinkedIn slug — mirrors enrich_new_contacts.py,
     sourced live from the We-Connect API. Never touches notes, photo, email, phone, or
-    any field already filled. Returns (enriched_count, cells_filled, missing_list)."""
-    import gspread
+    any field already filled. The 'missing' list is limited to people who connected in
+    the last `recent_days` days (the API returns ALL connections, so without this the
+    list floods with old/deleted ones). Returns (enriched_count, cells_filled, missing)."""
+    import gspread, time
+    cutoff = time.time() - recent_days * 86400
     FIELDS = ["Positions", "Education", "Location", "City", "State", "Industry"]
     try:
         api_key = st.secrets["weconnect"]["api_key"]
@@ -425,12 +428,23 @@ def enrich_from_weconnect(max_pages=20):
             break
         if not rows:
             break
+        if page == 1:  # stash a raw sample so we can see exactly what We-Connect returns
+            st.session_state["wc_debug_sample"] = rows[:3]
         for c in rows:
             slug, fields = _wc_enrich_fields(c)
             rownum = slug_rows.get(slug)
             if not rownum:
-                nm = (c.get("name") or f"{c.get('first_name','')} {c.get('last_name','')}").strip()
-                missing.append(f"{nm} ({slug})" if slug else (nm or "(unknown)"))
+                # API returns ALL connections; only flag RECENT acceptances as "to add"
+                # so old/deleted/never-added connections don't flood the list.
+                ts = c.get("timestamp_connected_at")
+                try:
+                    is_recent = bool(ts) and float(ts) >= cutoff
+                except (TypeError, ValueError):
+                    is_recent = False
+                if is_recent:
+                    nm = (c.get("name") or f"{c.get('first_name','')} {c.get('last_name','')}").strip()
+                    url = (c.get("linkedin_profile_url") or (f"https://www.linkedin.com/in/{slug}/" if slug else "")).strip()
+                    missing.append(f"{nm or slug or '(unknown)'} — {c.get('connected_at','')} — {url}")
                 continue
             for f in FIELDS:
                 val = (fields.get(f) or "").strip()
@@ -817,13 +831,26 @@ def _enrich_dialog():
     )
     if st.button("Enrich now", key="wc_enrich_btn", type="primary"):
         with st.spinner("Pulling from We-Connect and filling blanks…"):
-            _wc_enriched, _wc_cells, _wc_missing = enrich_from_weconnect()
-        st.success(f"Enriched {_wc_enriched} record(s) · {_wc_cells} field(s) filled.")
-        if _wc_missing:
-            st.warning(f"{len(_wc_missing)} accepted connection(s) not yet in your CRM — add by hand (photo + note):")
-            st.write("\n".join(f"- {m}" for m in _wc_missing[:30]))
-            if len(_wc_missing) > 30:
-                st.caption(f"…and {len(_wc_missing) - 30} more.")
+            st.session_state["wc_result"] = enrich_from_weconnect()
+    res = st.session_state.get("wc_result")
+    if res:
+        _e, _c, _miss = res
+        st.success(f"Enriched {_e} record(s) · {_c} field(s) filled.")
+        if _miss:
+            st.warning(f"{len(_miss)} recently-accepted connection(s) not yet in your CRM — add by hand (photo + note):")
+            st.download_button(
+                "📥 Download this list (CSV)",
+                "Name,ConnectedAt,LinkedInURL\n" + "\n".join('"' + m.replace(" — ", '","') + '"' for m in _miss),
+                f"to_add_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv", key="wc_miss_dl",
+            )
+            for m in _miss[:40]:
+                st.write(f"- {m}")
+            if len(_miss) > 40:
+                st.caption(f"…and {len(_miss) - 40} more (all in the CSV).")
+        else:
+            st.info("No recent acceptances missing from the CRM. 🎉")
+    if st.checkbox("🐞 Show raw We-Connect data (debug)", key="wc_dbg"):
+        st.json(st.session_state.get("wc_debug_sample") or "Run Enrich first to load a sample.")
 
 
 # ── Compact top row: view toggle + action buttons (search becomes the first full line) ──
