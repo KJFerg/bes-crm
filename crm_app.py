@@ -379,7 +379,7 @@ def _wc_enrich_fields(c):
     }
 
 
-def enrich_from_weconnect(max_pages=20, recent_days=30):
+def enrich_from_weconnect(max_pages=400, recent_days=30):
     """Fill ONLY the blank Positions/Education/Location/City/State/Industry fields on
     EXISTING CRM records, matched by LinkedIn slug — mirrors enrich_new_contacts.py,
     sourced live from the We-Connect API. Never touches notes, photo, email, phone, or
@@ -419,73 +419,62 @@ def enrich_from_weconnect(max_pages=20, recent_days=30):
         r = vals[rownum - 1] if 0 <= rownum - 1 < len(vals) else []
         return r[idx].strip() if len(r) > idx else ""
 
-    # The API has NO sort/date param and returns connections OLDEST-first, so recent
-    # acceptances sit on the LAST pages. Find the last page, then scan BACKWARD through
-    # the recent window only (stop once a whole page is older than the cutoff).
+    # Enrich based on what the CRM NEEDS, not on connection recency. Build the set of
+    # CRM records that have a slug AND at least one blank field, then scan We-Connect
+    # until every one of them is filled (stop early when the need-set empties). This
+    # catches reconnects/backlog adds wherever they sit in the (unsortable) list.
+    need = {}  # slug -> rownum, only records with a blank in the 6 fields
+    for _slug, _rn in slug_rows.items():
+        if any(not _cell(_rn, col_idx[f]) for f in FIELDS):
+            need[_slug] = _rn
+    need_total = len(need)
+    st.session_state["wc_debug"] = {"crm_records_needing_enrichment": need_total}
+
     batch, enriched, missing = [], set(), []
-    st.session_state["wc_debug"] = {"note": "no pages fetched yet"}
-
-    # Locate the last non-empty page: exponential probe, then binary search.
-    try:
-        hi, last_full = 1, 1
-        while hi <= 4096 and _wc_get_connections(api_key, hi):
-            last_full, hi = hi, hi * 2
-        lo, hi = last_full, min(hi, 4097)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if _wc_get_connections(api_key, mid):
-                lo = mid
-            else:
-                hi = mid - 1
-        last_page = lo
-    except Exception as e:
-        st.session_state["wc_debug"] = {"probe_error": str(e)}
-        st.error(f"We-Connect API error while locating connections: {e}")
-        return 0, 0, []
-
-    captured, page = False, last_page
-    while page >= 1 and (last_page - page) < 60:  # safety budget of 60 recent pages
+    page, sampled = 1, False
+    while page <= max_pages:
         try:
             rows = _wc_get_connections(api_key, page)
         except Exception as e:
             st.error(f"We-Connect API error on page {page}: {e}")
             break
-        if not captured and rows:
-            st.session_state["wc_debug"] = {"last_page": last_page, "scanning_page": page,
-                                            "row_count": len(rows), "sample": rows[:3]}
-            captured = True
         if not rows:
-            page -= 1
-            continue
-        page_has_recent = False
+            break
+        if not sampled:
+            st.session_state["wc_debug"] = {"crm_records_needing_enrichment": need_total,
+                                            "page1_row_count": len(rows), "sample": rows[:2]}
+            sampled = True
         for c in rows:
-            ts = c.get("timestamp_connected_at")
-            try:
-                is_recent = bool(ts) and float(ts) >= cutoff
-            except (TypeError, ValueError):
-                is_recent = False
-            if is_recent:
-                page_has_recent = True
             slug, fields = _wc_enrich_fields(c)
-            rownum = slug_rows.get(slug)
-            if not rownum:
-                if is_recent:  # only flag recent acceptances as "to add"
+            rownum = need.get(slug)
+            if rownum:  # a CRM record that needs filling
+                for f in FIELDS:
+                    val = (fields.get(f) or "").strip()
+                    if val and not _cell(rownum, col_idx[f]):
+                        batch.append({"range": gspread.utils.rowcol_to_a1(rownum, col_idx[f] + 1), "values": [[val]]})
+                        enriched.add(rownum)
+                need.pop(slug, None)  # filled — stop tracking
+            elif slug and slug not in slug_rows:  # not in CRM at all
+                ts = c.get("timestamp_connected_at")
+                try:
+                    is_recent = bool(ts) and float(ts) >= cutoff
+                except (TypeError, ValueError):
+                    is_recent = False
+                if is_recent:  # only flag RECENT acceptances as "to add"
                     nm = (c.get("name") or f"{c.get('first_name','')} {c.get('last_name','')}").strip()
                     url = (c.get("linkedin_profile_url") or (f"https://www.linkedin.com/in/{slug}/" if slug else "")).strip()
                     missing.append(f"{nm or slug or '(unknown)'} — {c.get('connected_at','')} — {url}")
-                continue
-            for f in FIELDS:  # fill blanks on matched records in the recent window
-                val = (fields.get(f) or "").strip()
-                if val and not _cell(rownum, col_idx[f]):
-                    batch.append({"range": gspread.utils.rowcol_to_a1(rownum, col_idx[f] + 1), "values": [[val]]})
-                    enriched.add(rownum)
-        if not page_has_recent:  # entirely older than cutoff → earlier pages are too
+        page += 1
+        if not need:  # every blank CRM record has been filled — done early
             break
-        page -= 1
+    st.session_state["wc_debug"]["records_filled"] = len(enriched)
+    st.session_state["wc_debug"]["still_unmatched_in_weconnect"] = len(need)
     if batch:
         try:
             for k in range(0, len(batch), 200):
                 ws.batch_update(batch[k:k + 200], value_input_option="USER_ENTERED")
+                if k + 200 < len(batch):
+                    time.sleep(1.1)  # stay under the Sheets 60-writes/min quota
             st.cache_data.clear()
             st.session_state.df = load_data()
         except Exception as e:
