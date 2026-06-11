@@ -469,6 +469,13 @@ def enrich_from_weconnect(max_pages=400, recent_days=30):
             break
     st.session_state["wc_debug"]["records_filled"] = len(enriched)
     st.session_state["wc_debug"]["still_unmatched_in_weconnect"] = len(need)
+    _fn = header.index("FirstName") if "FirstName" in header else None
+    _ln = header.index("LastName") if "LastName" in header else None
+    _unm = []
+    for _uslug, _urn in need.items():  # name the records that needed filling but weren't found
+        _nm = ((_cell(_urn, _fn) if _fn is not None else "") + " " + (_cell(_urn, _ln) if _ln is not None else "")).strip()
+        _unm.append(f"{_nm} [CRM slug: {_uslug}] row {_urn}")
+    st.session_state["wc_debug"]["still_unmatched_list"] = _unm[:60]
     if batch:
         try:
             for k in range(0, len(batch), 200):
