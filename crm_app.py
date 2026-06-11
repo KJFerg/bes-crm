@@ -419,42 +419,69 @@ def enrich_from_weconnect(max_pages=20, recent_days=30):
         r = vals[rownum - 1] if 0 <= rownum - 1 < len(vals) else []
         return r[idx].strip() if len(r) > idx else ""
 
-    batch, enriched, missing, page = [], set(), [], 1
+    # The API has NO sort/date param and returns connections OLDEST-first, so recent
+    # acceptances sit on the LAST pages. Find the last page, then scan BACKWARD through
+    # the recent window only (stop once a whole page is older than the cutoff).
+    batch, enriched, missing = [], set(), []
     st.session_state["wc_debug"] = {"note": "no pages fetched yet"}
-    while page <= max_pages:
+
+    # Locate the last non-empty page: exponential probe, then binary search.
+    try:
+        hi, last_full = 1, 1
+        while hi <= 4096 and _wc_get_connections(api_key, hi):
+            last_full, hi = hi, hi * 2
+        lo, hi = last_full, min(hi, 4097)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _wc_get_connections(api_key, mid):
+                lo = mid
+            else:
+                hi = mid - 1
+        last_page = lo
+    except Exception as e:
+        st.session_state["wc_debug"] = {"probe_error": str(e)}
+        st.error(f"We-Connect API error while locating connections: {e}")
+        return 0, 0, []
+
+    captured, page = False, last_page
+    while page >= 1 and (last_page - page) < 60:  # safety budget of 60 recent pages
         try:
             rows = _wc_get_connections(api_key, page)
         except Exception as e:
-            if page == 1:
-                st.session_state["wc_debug"] = {"page1_error": str(e)}
             st.error(f"We-Connect API error on page {page}: {e}")
             break
-        if page == 1:  # capture exactly what We-Connect returned for the first page
-            st.session_state["wc_debug"] = {"page1_row_count": len(rows or []), "sample": (rows or [])[:3]}
+        if not captured and rows:
+            st.session_state["wc_debug"] = {"last_page": last_page, "scanning_page": page,
+                                            "row_count": len(rows), "sample": rows[:3]}
+            captured = True
         if not rows:
-            break
+            page -= 1
+            continue
+        page_has_recent = False
         for c in rows:
+            ts = c.get("timestamp_connected_at")
+            try:
+                is_recent = bool(ts) and float(ts) >= cutoff
+            except (TypeError, ValueError):
+                is_recent = False
+            if is_recent:
+                page_has_recent = True
             slug, fields = _wc_enrich_fields(c)
             rownum = slug_rows.get(slug)
             if not rownum:
-                # API returns ALL connections; only flag RECENT acceptances as "to add"
-                # so old/deleted/never-added connections don't flood the list.
-                ts = c.get("timestamp_connected_at")
-                try:
-                    is_recent = bool(ts) and float(ts) >= cutoff
-                except (TypeError, ValueError):
-                    is_recent = False
-                if is_recent:
+                if is_recent:  # only flag recent acceptances as "to add"
                     nm = (c.get("name") or f"{c.get('first_name','')} {c.get('last_name','')}").strip()
                     url = (c.get("linkedin_profile_url") or (f"https://www.linkedin.com/in/{slug}/" if slug else "")).strip()
                     missing.append(f"{nm or slug or '(unknown)'} — {c.get('connected_at','')} — {url}")
                 continue
-            for f in FIELDS:
+            for f in FIELDS:  # fill blanks on matched records in the recent window
                 val = (fields.get(f) or "").strip()
                 if val and not _cell(rownum, col_idx[f]):
                     batch.append({"range": gspread.utils.rowcol_to_a1(rownum, col_idx[f] + 1), "values": [[val]]})
                     enriched.add(rownum)
-        page += 1
+        if not page_has_recent:  # entirely older than cutoff → earlier pages are too
+            break
+        page -= 1
     if batch:
         try:
             for k in range(0, len(batch), 200):
