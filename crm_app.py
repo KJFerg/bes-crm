@@ -881,6 +881,36 @@ def _enrich_dialog():
             st.write("Click **Enrich now** first, then check this box.")
         else:
             st.json(_dbg)
+        _lk = st.text_input("Look up one person by LinkedIn slug (debug)", key="wc_lookup_in",
+                            placeholder="e.g. tonya-reeder")
+        if _lk.strip():
+            try:
+                _ak = st.secrets["weconnect"]["api_key"]
+            except Exception:
+                _ak = ""
+            if not _ak:
+                st.error("No API key in secrets.")
+            else:
+                _tgt = _slug_from_url(_lk.strip()) or _lk.strip().lower()
+                with st.spinner(f"Searching We-Connect for '{_tgt}'…"):
+                    _found, _p = None, 1
+                    while _p <= 400:
+                        try:
+                            _rows = _wc_get_connections(_ak, _p)
+                        except Exception as _e:
+                            _found = {"error": str(_e), "page": _p}
+                            break
+                        if not _rows:
+                            break
+                        for _c in _rows:
+                            _s = (_c.get("linkedin") or _slug_from_url(_c.get("linkedin_profile_url", ""))).strip().lower()
+                            if _s == _tgt:
+                                _found = {"found_on_page": _p, "record": _c}
+                                break
+                        if _found:
+                            break
+                        _p += 1
+                st.json(_found or {"found": False, "pages_searched": _p, "target_slug": _tgt})
 
 
 # ── Compact top row: view toggle + action buttons (search becomes the first full line) ──
