@@ -420,16 +420,19 @@ def enrich_from_weconnect(max_pages=20, recent_days=30):
         return r[idx].strip() if len(r) > idx else ""
 
     batch, enriched, missing, page = [], set(), [], 1
+    st.session_state["wc_debug"] = {"note": "no pages fetched yet"}
     while page <= max_pages:
         try:
             rows = _wc_get_connections(api_key, page)
         except Exception as e:
+            if page == 1:
+                st.session_state["wc_debug"] = {"page1_error": str(e)}
             st.error(f"We-Connect API error on page {page}: {e}")
             break
+        if page == 1:  # capture exactly what We-Connect returned for the first page
+            st.session_state["wc_debug"] = {"page1_row_count": len(rows or []), "sample": (rows or [])[:3]}
         if not rows:
             break
-        if page == 1:  # stash a raw sample so we can see exactly what We-Connect returns
-            st.session_state["wc_debug_sample"] = rows[:3]
         for c in rows:
             slug, fields = _wc_enrich_fields(c)
             rownum = slug_rows.get(slug)
@@ -850,7 +853,11 @@ def _enrich_dialog():
         else:
             st.info("No recent acceptances missing from the CRM. 🎉")
     if st.checkbox("🐞 Show raw We-Connect data (debug)", key="wc_dbg"):
-        st.json(st.session_state.get("wc_debug_sample") or "Run Enrich first to load a sample.")
+        _dbg = st.session_state.get("wc_debug")
+        if _dbg is None:
+            st.write("Click **Enrich now** first, then check this box.")
+        else:
+            st.json(_dbg)
 
 
 # ── Compact top row: view toggle + action buttons (search becomes the first full line) ──
