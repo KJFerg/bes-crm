@@ -753,56 +753,16 @@ with col_stats:
 
 st.divider()
 
-# ── View toggle: Contacts (search + detail) or Leads (pipeline grid) ──
-view = st.radio("View", ["📇 Contacts", "📋 Leads"], horizontal=True,
-                label_visibility="collapsed", key="view_mode")
-
-if view == "📋 Leads":
-    f1, f2 = st.columns([2, 1])
-    with f1:
-        lead_tag = st.selectbox("Pipeline stage", ["All pipeline stages"] + PIPELINE_TAGS,
-                                label_visibility="collapsed")
-    leads_df = build_leads(df, lead_tag)
-    with f2:
-        st.markdown(f"<div style='text-align:right;padding-top:6px;'><b>{len(leads_df):,}</b> leads</div>",
-                    unsafe_allow_html=True)
-    if leads_df.empty:
-        st.info("No leads with a pipeline tag yet. Tag a contact (Looking, Sent Strategy Link, "
-                "Pro Bono Session, etc.) in the Contacts view and they'll show up here.")
-    else:
-        st.dataframe(
-            leads_df, use_container_width=True, hide_index=True, height=560,
-            column_config={
-                "LinkedIn": st.column_config.LinkColumn("LinkedIn", display_text="Profile"),
-            },
-        )
-        st.download_button(
-            "📥 Download leads CSV",
-            leads_df.to_csv(index=False).encode("utf-8"),
-            f"bes_leads_{datetime.now().strftime('%Y%m%d')}.csv",
-            "text/csv",
-        )
-    if st.button("🔄 Reload data", key="leads_reload"):
-        st.cache_data.clear()
-        st.session_state.df = load_data()
-        st.rerun()
-    st.stop()
-
-# ── Add Contact ──
-if st.session_state.get("add_done_msg"):
-    st.success(st.session_state.pop("add_done_msg"))
-# A nonce gives the panel + paste button a fresh identity after each add, so
-# the form collapses and the pasted photo clears instead of carrying over.
-_add_nonce = st.session_state.get("add_nonce", 0)
-with st.expander("➕ Add Contact" + ("​" * _add_nonce), expanded=False):
-    # Paste photo lives OUTSIDE the form — custom components don't work inside st.form.
+# ── Add Contact + Enrich open as pop-up dialogs from the compact top row ──
+@st.dialog("➕ Add Contact", width="large")
+def _add_contact_dialog():
     st.caption("Photo (optional): copy from LinkedIn (right-click → Copy image), then Paste.")
-    _add_paste = paste_button("📋 Paste photo", key=f"add_paste_{_add_nonce}")
+    _add_paste = paste_button("📋 Paste photo", key="add_paste_dlg")
     if _add_paste.image_data is not None:
         st.session_state["add_photo_img"] = _add_paste.image_data
     if st.session_state.get("add_photo_img") is not None:
         st.image(st.session_state["add_photo_img"], width=96, caption="Will attach to the new contact")
-    with st.form(f"add_contact_form_{_add_nonce}", clear_on_submit=True):
+    with st.form("add_contact_form_dlg", clear_on_submit=False):
         ac1, ac2 = st.columns(2)
         with ac1:
             f_first = st.text_input("First name")
@@ -840,32 +800,79 @@ with st.expander("➕ Add Contact" + ("​" * _add_nonce), expanded=False):
                 }
                 if add_contact(_new):
                     if _add_img is not None:
-                        set_photo(_photo_key, pil_thumb_b64(_add_img),
-                                  f"{f_first} {f_last}".strip())
+                        set_photo(_photo_key, pil_thumb_b64(_add_img), f"{f_first} {f_last}".strip())
                     st.session_state.pop("add_photo_img", None)
                     st.session_state["add_done_msg"] = f"Added {f_first} {f_last}.".strip()
-                    st.session_state["add_nonce"] = _add_nonce + 1
                     st.rerun()
 
 
-# ── Enrich from We-Connect ──
-with st.expander("🔄 Enrich from We-Connect", expanded=False):
+@st.dialog("🔄 Enrich from We-Connect", width="large")
+def _enrich_dialog():
     st.caption(
         "Fills the blank Title/Work-history, Education, Location, City, State, and "
         "Industry fields on contacts you've already added — matched by LinkedIn slug, "
         "pulled live from We-Connect (no export needed). Fills blanks only; never "
         "touches your notes, photo, or anything you typed. Also lists anyone who's "
-        "accepted but isn't in the CRM yet, so you can add them by hand with a photo and note."
+        "accepted but isn't in the CRM yet."
     )
     if st.button("Enrich now", key="wc_enrich_btn", type="primary"):
         with st.spinner("Pulling from We-Connect and filling blanks…"):
             _wc_enriched, _wc_cells, _wc_missing = enrich_from_weconnect()
         st.success(f"Enriched {_wc_enriched} record(s) · {_wc_cells} field(s) filled.")
         if _wc_missing:
-            st.warning(f"{len(_wc_missing)} accepted connection(s) not yet in your CRM — add these by hand (photo + note):")
+            st.warning(f"{len(_wc_missing)} accepted connection(s) not yet in your CRM — add by hand (photo + note):")
             st.write("\n".join(f"- {m}" for m in _wc_missing[:30]))
             if len(_wc_missing) > 30:
                 st.caption(f"…and {len(_wc_missing) - 30} more.")
+
+
+# ── Compact top row: view toggle + action buttons (search becomes the first full line) ──
+_tc1, _tc2, _tc3 = st.columns([2.2, 1, 1.7])
+with _tc1:
+    view = st.radio("View", ["📇 Contacts", "📋 Leads"], horizontal=True,
+                    label_visibility="collapsed", key="view_mode")
+with _tc2:
+    if st.button("➕ Add Contact", use_container_width=True):
+        _add_contact_dialog()
+with _tc3:
+    if st.button("🔄 Enrich from We-Connect", use_container_width=True):
+        _enrich_dialog()
+
+if st.session_state.get("add_done_msg"):
+    st.success(st.session_state.pop("add_done_msg"))
+
+if view == "📋 Leads":
+    f1, f2 = st.columns([2, 1])
+    with f1:
+        lead_tag = st.selectbox("Pipeline stage", ["All pipeline stages"] + PIPELINE_TAGS,
+                                label_visibility="collapsed")
+    leads_df = build_leads(df, lead_tag)
+    with f2:
+        st.markdown(f"<div style='text-align:right;padding-top:6px;'><b>{len(leads_df):,}</b> leads</div>",
+                    unsafe_allow_html=True)
+    if leads_df.empty:
+        st.info("No leads with a pipeline tag yet. Tag a contact (Looking, Sent Strategy Link, "
+                "Pro Bono Session, etc.) in the Contacts view and they'll show up here.")
+    else:
+        st.dataframe(
+            leads_df, use_container_width=True, hide_index=True, height=560,
+            column_config={
+                "LinkedIn": st.column_config.LinkColumn("LinkedIn", display_text="Profile"),
+            },
+        )
+        st.download_button(
+            "📥 Download leads CSV",
+            leads_df.to_csv(index=False).encode("utf-8"),
+            f"bes_leads_{datetime.now().strftime('%Y%m%d')}.csv",
+            "text/csv",
+        )
+    if st.button("🔄 Reload data", key="leads_reload"):
+        st.cache_data.clear()
+        st.session_state.df = load_data()
+        st.rerun()
+    st.stop()
+
+# (Add Contact and Enrich now open as pop-up dialogs from the top button row above.)
 
 
 # ── Search and Filters ──
