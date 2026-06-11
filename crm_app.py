@@ -309,6 +309,148 @@ def add_contact(new_data):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# WE-CONNECT ENRICH — fill the blank Positions/Education/Location/City/State/
+# Industry fields on EXISTING CRM records, matched by LinkedIn slug, sourced live
+# from the We-Connect API (mirrors enrich_new_contacts.py — no CSV export needed).
+# Fills blanks ONLY; never overwrites your data, your note, or your photo. Also
+# reports who's accepted but isn't in the CRM yet (so you add them by hand with a
+# photo + note). API key lives in st.secrets['weconnect']['api_key'] (NOT in repo).
+# ══════════════════════════════════════════════════════════════════════════
+
+WECONNECT_BASE = "https://api-us-1.we-connect.io"
+_IT_EXEC_KW = (
+    "cio", "cto", "ciso", "cdo", "chief information", "chief technology",
+    "chief digital", "chief data", "chief ai", "vp of it", "vp information",
+    "vice president, information", "head of it", "head of technology",
+    "director of it", "it director", "information technology",
+)
+
+
+def _slug_from_url(url):
+    """Lowercase LinkedIn slug from a profile URL (or a bare slug)."""
+    if not url:
+        return ""
+    s = str(url).strip()
+    m = re.search(r"/in/([^/?#]+)", s)
+    slug = m.group(1) if m else s
+    return slug.strip().lower().strip("/")
+
+
+def _wc_get_connections(api_key, page):
+    """One page of the We-Connect connections endpoint. Returns a list."""
+    import requests
+    r = requests.get(
+        f"{WECONNECT_BASE}/api/v1/connections",
+        params={"api_key": api_key, "page": page},
+        headers={"Accept": "application/json"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    body = r.json()
+    if isinstance(body, dict):
+        return body.get("data") or body.get("connections") or []
+    return body or []
+
+
+def _wc_enrich_fields(c):
+    """Extract the six enrich-only fields from a We-Connect connection object.
+    Returns (slug, {Positions, Education, Location, City, State, Industry})."""
+    slug = (c.get("linkedin") or _slug_from_url(c.get("linkedin_profile_url", ""))).strip().lower()
+    title = (c.get("title") or "").strip()
+    company = (c.get("company") or "").strip()
+    exp = c.get("experience") or []
+    if isinstance(exp, list) and exp:
+        roles = []
+        for e in exp:
+            if isinstance(e, dict) and (e.get("title") or e.get("name")):
+                roles.append(f"{(e.get('title') or '').strip()} at {(e.get('name') or '').strip()}".strip(" at "))
+        positions = "; ".join(roles)
+    else:
+        positions = f"{title} at {company}" if (title and company) else (title or company)
+    location = (c.get("location") or "").strip()
+    parts = [p.strip() for p in location.split(",")] if location else []
+    return slug, {
+        "Positions": positions,
+        "Education": (c.get("education") or "").strip(),
+        "Location": location,
+        "City": parts[0] if len(parts) >= 1 else "",
+        "State": parts[1] if len(parts) >= 2 else "",
+        "Industry": (c.get("industry") or "").strip(),
+    }
+
+
+def enrich_from_weconnect(max_pages=20):
+    """Fill ONLY the blank Positions/Education/Location/City/State/Industry fields on
+    EXISTING CRM records, matched by LinkedIn slug — mirrors enrich_new_contacts.py,
+    sourced live from the We-Connect API. Never touches notes, photo, email, phone, or
+    any field already filled. Returns (enriched_count, cells_filled, missing_list)."""
+    import gspread
+    FIELDS = ["Positions", "Education", "Location", "City", "State", "Industry"]
+    try:
+        api_key = st.secrets["weconnect"]["api_key"]
+    except Exception:
+        api_key = ""
+    if not api_key:
+        st.error('We-Connect API key not found. Add it to Streamlit secrets as:\n\n[weconnect]\napi_key = "your-key"')
+        return 0, 0, []
+    ws = _contacts_ws()
+    vals = ws.get_all_values()
+    header = vals[0]
+    if "LinkedInURL" not in header:
+        st.error("No LinkedInURL column in the sheet.")
+        return 0, 0, []
+    iURL = header.index("LinkedInURL")
+    for f in FIELDS:  # ensure the enrich columns exist
+        if f not in header:
+            header.append(f)
+            ws.update_cell(1, len(header), f)
+    header = ws.row_values(1)
+    col_idx = {f: header.index(f) for f in FIELDS}
+    slug_rows = {}
+    for i, row in enumerate(vals[1:], start=2):
+        g = _slug_from_url(row[iURL]) if len(row) > iURL else ""
+        if g:
+            slug_rows.setdefault(g, i)
+
+    def _cell(rownum, idx):
+        r = vals[rownum - 1] if 0 <= rownum - 1 < len(vals) else []
+        return r[idx].strip() if len(r) > idx else ""
+
+    batch, enriched, missing, page = [], set(), [], 1
+    while page <= max_pages:
+        try:
+            rows = _wc_get_connections(api_key, page)
+        except Exception as e:
+            st.error(f"We-Connect API error on page {page}: {e}")
+            break
+        if not rows:
+            break
+        for c in rows:
+            slug, fields = _wc_enrich_fields(c)
+            rownum = slug_rows.get(slug)
+            if not rownum:
+                nm = (c.get("name") or f"{c.get('first_name','')} {c.get('last_name','')}").strip()
+                missing.append(f"{nm} ({slug})" if slug else (nm or "(unknown)"))
+                continue
+            for f in FIELDS:
+                val = (fields.get(f) or "").strip()
+                if val and not _cell(rownum, col_idx[f]):
+                    batch.append({"range": gspread.utils.rowcol_to_a1(rownum, col_idx[f] + 1), "values": [[val]]})
+                    enriched.add(rownum)
+        page += 1
+    if batch:
+        try:
+            for k in range(0, len(batch), 200):
+                ws.batch_update(batch[k:k + 200], value_input_option="USER_ENTERED")
+            st.cache_data.clear()
+            st.session_state.df = load_data()
+        except Exception as e:
+            st.error(f"Pulled enrichment but could not write it: {e}")
+            return 0, 0, missing
+    return len(enriched), len(batch), missing
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # PHOTOS — stored in a separate "Photos" worksheet (PhotoKey | Name | Base64)
 # to keep the big 40K Contacts sheet lean. Accessed directly via gspread so we
 # fetch one photo at a time instead of loading thousands of base64 strings.
@@ -704,6 +846,26 @@ with st.expander("➕ Add Contact" + ("​" * _add_nonce), expanded=False):
                     st.session_state["add_done_msg"] = f"Added {f_first} {f_last}.".strip()
                     st.session_state["add_nonce"] = _add_nonce + 1
                     st.rerun()
+
+
+# ── Enrich from We-Connect ──
+with st.expander("🔄 Enrich from We-Connect", expanded=False):
+    st.caption(
+        "Fills the blank Title/Work-history, Education, Location, City, State, and "
+        "Industry fields on contacts you've already added — matched by LinkedIn slug, "
+        "pulled live from We-Connect (no export needed). Fills blanks only; never "
+        "touches your notes, photo, or anything you typed. Also lists anyone who's "
+        "accepted but isn't in the CRM yet, so you can add them by hand with a photo and note."
+    )
+    if st.button("Enrich now", key="wc_enrich_btn", type="primary"):
+        with st.spinner("Pulling from We-Connect and filling blanks…"):
+            _wc_enriched, _wc_cells, _wc_missing = enrich_from_weconnect()
+        st.success(f"Enriched {_wc_enriched} record(s) · {_wc_cells} field(s) filled.")
+        if _wc_missing:
+            st.warning(f"{len(_wc_missing)} accepted connection(s) not yet in your CRM — add these by hand (photo + note):")
+            st.write("\n".join(f"- {m}" for m in _wc_missing[:30]))
+            if len(_wc_missing) > 30:
+                st.caption(f"…and {len(_wc_missing) - 30} more.")
 
 
 # ── Search and Filters ──
