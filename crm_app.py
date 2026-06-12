@@ -1158,36 +1158,39 @@ with detail_col:
                 on_change=_save_source, args=(f"src_{sel_idx}", sel_idx),
             )
 
-            # ── Edit details (location, industry, education, name fixes — auto-saves) ──
+            # ── Edit details (one Location box, plus name/industry/education — auto-saves) ──
             with st.expander("✏️ Edit details"):
+                def _save_location(lkey, row_idx):
+                    """One box → fills Location, and splits 'City, State' into City/State too."""
+                    v = (st.session_state[lkey] or "").strip()
+                    save_field(row_idx, "Location", v)
+                    parts = [p.strip() for p in v.split(",")]
+                    save_field(row_idx, "City", parts[0] if len(parts) >= 1 and "," in v else (v if parts else ""))
+                    save_field(row_idx, "State", parts[1] if len(parts) >= 2 else "")
+                _loc_cur = _clean_val(row.get("Location", "")) or ", ".join(
+                    [x for x in (_clean_val(row.get("City", "")), _clean_val(row.get("State", ""))) if x])
+                st.text_input("Location", value=_loc_cur, key=f"loc_{sel_idx}",
+                              placeholder="e.g. Washington, DC  (or Washington DC-Baltimore Area)",
+                              on_change=_save_location, args=(f"loc_{sel_idx}", sel_idx))
                 ec1, ec2 = st.columns(2)
                 with ec1:
                     st.text_input("First name", value=_clean_val(row.get("FirstName", "")),
                                   key=f"fn_{sel_idx}",
                                   on_change=_save_on_change, args=(f"fn_{sel_idx}", "FirstName", sel_idx))
-                    st.text_input("City", value=_clean_val(row.get("City", "")),
-                                  key=f"city_{sel_idx}",
-                                  on_change=_save_on_change, args=(f"city_{sel_idx}", "City", sel_idx))
-                    st.text_input("Location", value=_clean_val(row.get("Location", "")),
-                                  key=f"loc_{sel_idx}", placeholder="e.g. Washington DC-Baltimore Area",
-                                  on_change=_save_on_change, args=(f"loc_{sel_idx}", "Location", sel_idx))
-                    st.text_input("Education", value=_clean_val(row.get("Education", "")),
-                                  key=f"edu_{sel_idx}",
-                                  on_change=_save_on_change, args=(f"edu_{sel_idx}", "Education", sel_idx))
-                with ec2:
-                    st.text_input("Last name", value=_clean_val(row.get("LastName", "")),
-                                  key=f"ln_{sel_idx}",
-                                  on_change=_save_on_change, args=(f"ln_{sel_idx}", "LastName", sel_idx))
-                    st.text_input("State", value=_clean_val(row.get("State", "")),
-                                  key=f"state_{sel_idx}",
-                                  on_change=_save_on_change, args=(f"state_{sel_idx}", "State", sel_idx))
                     st.text_input("Industry", value=_clean_val(row.get("Industry", "")),
                                   key=f"ind_{sel_idx}",
                                   on_change=_save_on_change, args=(f"ind_{sel_idx}", "Industry", sel_idx))
                     st.text_input("LinkedIn URL", value=_clean_val(row.get("LinkedInURL", "")),
                                   key=f"liurl_{sel_idx}",
                                   on_change=_save_on_change, args=(f"liurl_{sel_idx}", "LinkedInURL", sel_idx))
-                st.caption("Auto-saves on Enter/Tab. For title/company, use ✏️ Update current role.")
+                with ec2:
+                    st.text_input("Last name", value=_clean_val(row.get("LastName", "")),
+                                  key=f"ln_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"ln_{sel_idx}", "LastName", sel_idx))
+                    st.text_input("Education", value=_clean_val(row.get("Education", "")),
+                                  key=f"edu_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"edu_{sel_idx}", "Education", sel_idx))
+                st.caption("Auto-saves on Enter/Tab. The single Location box fills city + state. For title/company, use ✏️ Update current role.")
 
         with main_area:
             # ── Photo ──
@@ -1210,15 +1213,11 @@ with detail_col:
                         st.success("Photo saved!")
                         st.rerun()
 
-            # ── Header: Name, Title, Location ──
-            loc_parts = []
-            if row.get("City"):
-                loc_parts.append(str(row["City"]))
-            if row.get("State"):
-                loc_parts.append(str(row["State"]))
-            if row.get("Location") and not loc_parts:
-                loc_parts.append(str(row["Location"]))
-            loc_str = ', '.join(loc_parts)
+            # ── Header: Name, Title, Location (Location is the source of truth) ──
+            loc_str = _clean_val(row.get("Location", "")).strip()
+            if not loc_str:  # legacy records without Location: fall back to City/State
+                _lp = [_clean_val(row.get(c, "")).strip() for c in ("City", "State")]
+                loc_str = ", ".join([x for x in _lp if x])
 
             header_line = f"### {name}"
             if loc_str:
