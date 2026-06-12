@@ -1158,6 +1158,37 @@ with detail_col:
                 on_change=_save_source, args=(f"src_{sel_idx}", sel_idx),
             )
 
+            # ── Edit details (location, industry, education, name fixes — auto-saves) ──
+            with st.expander("✏️ Edit details"):
+                ec1, ec2 = st.columns(2)
+                with ec1:
+                    st.text_input("First name", value=_clean_val(row.get("FirstName", "")),
+                                  key=f"fn_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"fn_{sel_idx}", "FirstName", sel_idx))
+                    st.text_input("City", value=_clean_val(row.get("City", "")),
+                                  key=f"city_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"city_{sel_idx}", "City", sel_idx))
+                    st.text_input("Location", value=_clean_val(row.get("Location", "")),
+                                  key=f"loc_{sel_idx}", placeholder="e.g. Washington DC-Baltimore Area",
+                                  on_change=_save_on_change, args=(f"loc_{sel_idx}", "Location", sel_idx))
+                    st.text_input("Education", value=_clean_val(row.get("Education", "")),
+                                  key=f"edu_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"edu_{sel_idx}", "Education", sel_idx))
+                with ec2:
+                    st.text_input("Last name", value=_clean_val(row.get("LastName", "")),
+                                  key=f"ln_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"ln_{sel_idx}", "LastName", sel_idx))
+                    st.text_input("State", value=_clean_val(row.get("State", "")),
+                                  key=f"state_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"state_{sel_idx}", "State", sel_idx))
+                    st.text_input("Industry", value=_clean_val(row.get("Industry", "")),
+                                  key=f"ind_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"ind_{sel_idx}", "Industry", sel_idx))
+                    st.text_input("LinkedIn URL", value=_clean_val(row.get("LinkedInURL", "")),
+                                  key=f"liurl_{sel_idx}",
+                                  on_change=_save_on_change, args=(f"liurl_{sel_idx}", "LinkedInURL", sel_idx))
+                st.caption("Auto-saves on Enter/Tab. For title/company, use ✏️ Update current role.")
+
         with main_area:
             # ── Photo ──
             pkey = photo_key_for_row(row)
