@@ -1305,12 +1305,18 @@ with detail_col:
                 stats_line += f"&emsp;|&emsp;{email_count} emails"
         st.markdown(stats_line, unsafe_allow_html=True)
 
-        # Add new note. A per-contact nonce gives the input a fresh key after each
-        # save, so it clears and CANNOT re-fire on rerun (was creating duplicates).
+        # Add new note. Wrapped in a FORM so the note commits ONLY when Ken
+        # presses Enter (or clicks Save) — NOT when the box loses focus.
+        # A bare text_input reruns on blur, and switching browser tabs is a
+        # blur event, so half-typed notes were being saved on tab-switch.
+        # A form never submits on blur. The per-contact nonce remounts the form
+        # fresh after each save, so it clears and CANNOT re-fire on rerun.
         _nnonce = st.session_state.get(f"note_nonce_{sel_idx}", 0)
-        new_note = st.text_input("Add note", key=f"note_{sel_idx}_{_nnonce}",
-                                 placeholder="Type a note and press Enter...")
-        if new_note:
+        with st.form(key=f"note_form_{sel_idx}_{_nnonce}", clear_on_submit=True):
+            new_note = st.text_input("Add note", key=f"note_{sel_idx}_{_nnonce}",
+                                     placeholder="Type a note and press Enter...")
+            note_submitted = st.form_submit_button("Save note")
+        if note_submitted and new_note.strip():
             if save_note(sel_idx, new_note):
                 st.session_state[f"note_nonce_{sel_idx}"] = _nnonce + 1
                 st.success("Note saved!")
