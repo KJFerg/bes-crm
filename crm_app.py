@@ -15,6 +15,7 @@ import io
 import re
 import base64
 import uuid
+from urllib.parse import quote
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
 from streamlit_paste_button import paste_image_button as paste_button
@@ -1259,6 +1260,17 @@ with detail_col:
             # LinkedIn
             if row.get("LinkedInURL"):
                 st.markdown(f"🔗 [LinkedIn Profile]({row['LinkedInURL']})")
+
+            # Gmail — one-click search of your LIVE inbox for this person's
+            # email thread(s). We link, not import: the live inbox never goes
+            # stale, and big email bodies stay out of the sheet. Searches all
+            # known addresses OR'd; falls back to the full name when none.
+            _gm_emails = [_clean_val(row.get(c, "")).strip()
+                          for c in ("Email1", "Email2", "Email3")]
+            _gm_emails = [e for e in _gm_emails if e and "@" in e]
+            _gm_query = " OR ".join(_gm_emails) if _gm_emails else f'"{name}"'
+            _gm_url = "https://mail.google.com/mail/u/0/#search/" + quote(_gm_query)
+            st.markdown(f"📧 [Emails in Gmail]({_gm_url})")
 
             # Sources
             if source_badges:
