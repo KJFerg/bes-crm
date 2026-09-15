@@ -939,11 +939,29 @@ def _wc_new_record(c):
     }
 
 
-def find_new_weconnect_contacts(recent_days=7, max_pages=400):
-    """Connections accepted in the last `recent_days` days whose slug is not in the
-    CRM. Returns a list of _wc_new_record dicts, newest first."""
-    import time
-    cutoff = time.time() - recent_days * 86400
+def _wc_campaign_names(c):
+    """Campaign names on a connection object, lowercased."""
+    out = []
+    for x in (c.get("campaigns") or []):
+        if isinstance(x, str):
+            out.append(x.strip().lower())
+        elif isinstance(x, dict):
+            n = x.get("name") or x.get("campaign_name") or ""
+            if n:
+                out.append(str(n).strip().lower())
+    return out
+
+
+def find_new_weconnect_contacts(campaign_match="", max_pages=400):
+    """Every We-Connect connection whose LinkedIn slug is NOT already in the CRM.
+
+    No date filter: the CRM slug check already prevents duplicates, so a date
+    window could only cause misses. (timestamp_connected_at proved unreliable as
+    an acceptance date — people who connected today were excluded by a 7-day
+    window.)
+
+    campaign_match: case-insensitive substring. If given, only connections whose
+    campaigns list contains a matching name are returned. Blank = all campaigns."""
     try:
         api_key = st.secrets["weconnect"]["api_key"]
     except Exception:
@@ -964,8 +982,9 @@ def find_new_weconnect_contacts(recent_days=7, max_pages=400):
         if g:
             known.add(g)
 
-    found, page = [], 1
-    prog = st.progress(0.0, text="Scanning We-Connect…")
+    want = (campaign_match or "").strip().lower()
+    found, page, seen, skipped_campaign = [], 1, 0, 0
+    status = st.empty()
     while page <= max_pages:
         try:
             rows = _wc_get_connections(api_key, page)
@@ -974,20 +993,27 @@ def find_new_weconnect_contacts(recent_days=7, max_pages=400):
             break
         if not rows:
             break
+        seen += len(rows)
         for c in rows:
             rec = _wc_new_record(c)
             if not rec["slug"] or rec["slug"] in known:
                 continue
-            ts = c.get("timestamp_connected_at")
-            try:
-                if not (ts and float(ts) >= cutoff):
+            if want:
+                names = _wc_campaign_names(c)
+                if not any(want in n for n in names):
+                    skipped_campaign += 1
                     continue
-            except (TypeError, ValueError):
-                continue
+            rec["campaigns"] = _wc_campaign_names(c)
             found.append(rec)
-        prog.progress(min(page / 40.0, 1.0), text=f"Scanning We-Connect… page {page}, {len(found)} new")
+            known.add(rec["slug"])  # guard against the same person on two pages
+        status.info(f"Scanning We-Connect… page {page} · {seen:,} connections checked · "
+                    f"**{len(found)} new**")
         page += 1
-    prog.empty()
+    status.empty()
+    msg = f"Scan complete: {page - 1} pages, {seen:,} connections checked, {len(found)} new."
+    if want:
+        msg += f" ({skipped_campaign} new-to-CRM skipped — not in a campaign matching '{campaign_match}'.)"
+    st.caption(msg)
     found.sort(key=lambda r: r.get("connected_at", ""), reverse=True)
     return found
 
@@ -996,8 +1022,10 @@ def find_new_weconnect_contacts(recent_days=7, max_pages=400):
 def _new_connections_dialog():
     st.caption("People who accepted your invitation on We-Connect but are not in the CRM yet. "
                "Everything below is pre-filled from We-Connect. Photos are fetched automatically.")
-    days = st.selectbox("Accepted in the last…", [7, 14, 30, 60, 90], index=0,
-                        format_func=lambda d: f"{d} days")
+    camp = st.text_input("Only this campaign (leave blank for all)",
+                         value="Campaign A", key="newconn_camp",
+                         help="Case-insensitive substring match against the campaign "
+                              "names on each connection. Blank scans every campaign.")
     src = st.selectbox("Source to record", AVAILABLE_SOURCES,
                        index=0, key="newconn_source")
     tags = st.multiselect("Extra tags for everyone (added on top of the derived ones)",
@@ -1005,13 +1033,15 @@ def _new_connections_dialog():
     get_photos = st.checkbox("Fetch photos automatically", value=True)
 
     if st.button("🔍 Find new connections", type="primary"):
-        st.session_state["newconn_found"] = find_new_weconnect_contacts(recent_days=days)
+        st.session_state["newconn_found"] = find_new_weconnect_contacts(campaign_match=camp)
 
     found = st.session_state.get("newconn_found")
     if found is None:
         return
     if not found:
-        st.info("No new connections found in that window. Everyone who accepted is already in the CRM.")
+        st.info("Nothing new — everyone in scope is already in the CRM. "
+                "If you expected someone, try clearing the campaign box: they may be "
+                "in a different campaign, or not in a campaign at all.")
         return
 
     st.write(f"**{len(found)} new — untick anyone you don't want.**")
