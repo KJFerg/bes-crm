@@ -377,6 +377,9 @@ def _wc_enrich_fields(c):
         "City": parts[0] if len(parts) >= 1 else "",
         "State": parts[1] if len(parts) >= 2 else "",
         "Industry": (c.get("industry") or "").strip(),
+        # Opportunistic only — NOT part of FIELDS/the need-set. See OPPO_FIELDS below.
+        "Email1": (c.get("email") or "").strip(),
+        "Phone1": (c.get("phone") or "").strip(),
     }
 
 
@@ -390,6 +393,11 @@ def enrich_from_weconnect(max_pages=400, recent_days=30):
     import gspread, time
     cutoff = time.time() - recent_days * 86400
     FIELDS = ["Positions", "Education", "Location", "City", "State", "Industry"]
+    # Filled whenever a slug matches, but NOT used to decide who needs enriching —
+    # about half the CRM has no email, which would make the need-set enormous and
+    # defeat the early-stop.
+    OPPO_FIELDS = ["Email1", "Phone1"]
+    oppo_filled = []
     try:
         api_key = st.secrets["weconnect"]["api_key"]
     except Exception:
@@ -410,6 +418,9 @@ def enrich_from_weconnect(max_pages=400, recent_days=30):
             ws.update_cell(1, len(header), f)
     header = ws.row_values(1)
     col_idx = {f: header.index(f) for f in FIELDS}
+    for f in OPPO_FIELDS:  # only if the column already exists — never create these
+        if f in header:
+            col_idx[f] = header.index(f)
     slug_rows = {}
     for i, row in enumerate(vals[1:], start=2):
         g = _slug_from_url(row[iURL]) if len(row) > iURL else ""
@@ -447,6 +458,21 @@ def enrich_from_weconnect(max_pages=400, recent_days=30):
             sampled = True
         for c in rows:
             slug, fields = _wc_enrich_fields(c)
+
+            # Email/phone: fill for ANY matching CRM record with a blank, not just the
+            # need-set. Deliberately outside the need-trigger so the scan's early-stop
+            # behaviour is unchanged (see OPPO_FIELDS note above).
+            _oppo_row = slug_rows.get(slug)
+            if _oppo_row:
+                for f in OPPO_FIELDS:
+                    if f not in col_idx:
+                        continue
+                    val = (fields.get(f) or "").strip()
+                    if val and not _cell(_oppo_row, col_idx[f]):
+                        batch.append({"range": gspread.utils.rowcol_to_a1(_oppo_row, col_idx[f] + 1), "values": [[val]]})
+                        enriched.add(_oppo_row)
+                        oppo_filled.append(f"{f} for row {_oppo_row} ({slug})")
+
             rownum = need.get(slug)
             if rownum:  # a CRM record that needs filling
                 for f in FIELDS:
@@ -469,6 +495,8 @@ def enrich_from_weconnect(max_pages=400, recent_days=30):
         if not need:  # every blank CRM record has been filled — done early
             break
     st.session_state["wc_debug"]["records_filled"] = len(enriched)
+    st.session_state["wc_debug"]["email_phone_filled"] = len(oppo_filled)
+    st.session_state["wc_debug"]["email_phone_list"] = oppo_filled[:60]
     st.session_state["wc_debug"]["still_unmatched_in_weconnect"] = len(need)
     _fn = header.index("FirstName") if "FirstName" in header else None
     _ln = header.index("LastName") if "LastName" in header else None
