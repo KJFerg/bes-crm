@@ -15,3 +15,11 @@ __pycache__/
 _b1.txt
 _b2.txt
 _head_crm.py
+new_secrets.txt
+*secrets*
+service-account-key.json
+*.json
+*.csv
+*.bak
+crelate_probe_report.txt
+photo_recovery_report.txt
