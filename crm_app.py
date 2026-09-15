@@ -822,6 +822,193 @@ with col_stats:
 
 st.divider()
 
+# ══════════════════════════════════════════════════════════════════════════
+# NEW CONNECTIONS — people who accepted on We-Connect but are not in the CRM.
+# Everything is built from the same API response the enrich already parses, so
+# no CSV export is needed. Photos are fetched server-side from the CDN URL the
+# API returns (no LinkedIn session involved — it cannot affect the account).
+# ══════════════════════════════════════════════════════════════════════════
+
+def _wc_photo_image(url, timeout=12):
+    """Fetch a profile_picture CDN URL and return a PIL image, or None.
+    Plain image GET from a server — no login, no LinkedIn session, no profile view."""
+    if not url:
+        return None
+    try:
+        import requests
+        from PIL import Image
+        r = requests.get(url, timeout=timeout)
+        if r.status_code != 200 or not r.content:
+            return None
+        return Image.open(io.BytesIO(r.content))
+    except Exception:
+        return None
+
+
+def _wc_new_record(c):
+    """Turn one We-Connect connection object into a CRM row dict."""
+    slug, fields = _wc_enrich_fields(c)
+    first = (c.get("first_name") or "").strip()
+    last = (c.get("last_name") or "").strip()
+    if not (first or last):
+        nm = (c.get("name") or "").strip()
+        if nm:
+            bits = nm.split(" ", 1)
+            first = bits[0]
+            last = bits[1] if len(bits) > 1 else ""
+    url = (c.get("linkedin_profile_url")
+           or (f"https://www.linkedin.com/in/{slug}/" if slug else "")).strip()
+    title = (c.get("title") or "").strip()
+    company = (c.get("company") or "").strip()
+    return {
+        "slug": slug,
+        "photo_url": (c.get("profile_picture") or "").strip(),
+        "connected_at": (c.get("connected_at") or "").strip(),
+        "title": title,
+        "company": company,
+        "row": {
+            "FirstName": first,
+            "LastName": last,
+            "LinkedInURL": url,
+            "Positions": fields.get("Positions", ""),
+            "Education": fields.get("Education", ""),
+            "Location": fields.get("Location", ""),
+            "City": fields.get("City", ""),
+            "State": fields.get("State", ""),
+            "Industry": fields.get("Industry", ""),
+            "Email1": (c.get("email") or "").strip(),
+            "Phone1": (c.get("phone") or "").strip(),
+        },
+    }
+
+
+def find_new_weconnect_contacts(recent_days=7, max_pages=400):
+    """Connections accepted in the last `recent_days` days whose slug is not in the
+    CRM. Returns a list of _wc_new_record dicts, newest first."""
+    import time
+    cutoff = time.time() - recent_days * 86400
+    try:
+        api_key = st.secrets["weconnect"]["api_key"]
+    except Exception:
+        api_key = ""
+    if not api_key:
+        st.error("We-Connect API key not found in Streamlit secrets.")
+        return []
+    ws = _contacts_ws()
+    vals = ws.get_all_values()
+    header = vals[0]
+    if "LinkedInURL" not in header:
+        st.error("No LinkedInURL column in the sheet.")
+        return []
+    iURL = header.index("LinkedInURL")
+    known = set()
+    for row in vals[1:]:
+        g = _slug_from_url(row[iURL]) if len(row) > iURL else ""
+        if g:
+            known.add(g)
+
+    found, page = [], 1
+    prog = st.progress(0.0, text="Scanning We-Connect…")
+    while page <= max_pages:
+        try:
+            rows = _wc_get_connections(api_key, page)
+        except Exception as e:
+            st.error(f"We-Connect API error on page {page}: {e}")
+            break
+        if not rows:
+            break
+        for c in rows:
+            rec = _wc_new_record(c)
+            if not rec["slug"] or rec["slug"] in known:
+                continue
+            ts = c.get("timestamp_connected_at")
+            try:
+                if not (ts and float(ts) >= cutoff):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            found.append(rec)
+        prog.progress(min(page / 40.0, 1.0), text=f"Scanning We-Connect… page {page}, {len(found)} new")
+        page += 1
+    prog.empty()
+    found.sort(key=lambda r: r.get("connected_at", ""), reverse=True)
+    return found
+
+
+@st.dialog("🆕 New Connections", width="large")
+def _new_connections_dialog():
+    st.caption("People who accepted your invitation on We-Connect but are not in the CRM yet. "
+               "Everything below is pre-filled from We-Connect. Photos are fetched automatically.")
+    days = st.selectbox("Accepted in the last…", [7, 14, 30, 60, 90], index=0,
+                        format_func=lambda d: f"{d} days")
+    src = st.selectbox("Source to record", AVAILABLE_SOURCES,
+                       index=0, key="newconn_source")
+    tags = st.multiselect("Tags to apply to all", options=AVAILABLE_TAGS, key="newconn_tags")
+    get_photos = st.checkbox("Fetch photos automatically", value=True)
+
+    if st.button("🔍 Find new connections", type="primary"):
+        st.session_state["newconn_found"] = find_new_weconnect_contacts(recent_days=days)
+
+    found = st.session_state.get("newconn_found")
+    if found is None:
+        return
+    if not found:
+        st.info("No new connections found in that window. Everyone who accepted is already in the CRM.")
+        return
+
+    st.write(f"**{len(found)} new — untick anyone you don't want.**")
+    picked = []
+    for i, rec in enumerate(found):
+        r = rec["row"]
+        nm = f"{r['FirstName']} {r['LastName']}".strip() or rec["slug"]
+        label = f"**{nm}** — {rec['title'] or '(no title)'}"
+        if rec["company"]:
+            label += f" at {rec['company']}"
+        c1, c2 = st.columns([1, 14])
+        with c1:
+            keep = st.checkbox("", value=True, key=f"nc_keep_{i}", label_visibility="collapsed")
+        with c2:
+            st.markdown(label)
+            bits = [b for b in (r["Location"], rec["connected_at"], r["Email1"]) if b]
+            if bits:
+                st.caption(" · ".join(bits))
+        if keep:
+            picked.append(rec)
+
+    st.divider()
+    if st.button(f"➕ Add all ticked ({len(picked)})", type="primary", disabled=not picked):
+        today = datetime.now().strftime("%Y-%m-%d")
+        ok, failed, photos = 0, [], 0
+        bar = st.progress(0.0, text="Adding…")
+        for n, rec in enumerate(picked, start=1):
+            row = dict(rec["row"])
+            row["Sources"] = src
+            row["SourceDetail"] = src
+            row["DistributionTags"] = "; ".join(tags)
+            row["CreatedDate"] = today
+            row["Notes"] = f"[{today}] Accepted invitation (We-Connect)"
+            img = _wc_photo_image(rec["photo_url"]) if get_photos else None
+            key = uuid.uuid4().hex if img is not None else ""
+            row["PhotoKey"] = key
+            nm = f"{row['FirstName']} {row['LastName']}".strip()
+            if add_contact(row):
+                ok += 1
+                if img is not None and set_photo(key, pil_thumb_b64(img), nm):
+                    photos += 1
+            else:
+                failed.append(nm or rec["slug"])
+            bar.progress(n / len(picked), text=f"Adding… {n}/{len(picked)}")
+        bar.empty()
+        st.session_state.pop("newconn_found", None)
+        msg = f"Added {ok} contact(s)"
+        if get_photos:
+            msg += f", {photos} with photos"
+        if failed:
+            msg += f". Failed: {', '.join(failed)}"
+        st.session_state["add_done_msg"] = msg + "."
+        st.rerun()
+
+
 # ── Add Contact + Enrich open as pop-up dialogs from the compact top row ──
 @st.dialog("➕ Add Contact", width="large")
 def _add_contact_dialog():
@@ -943,7 +1130,7 @@ def _enrich_dialog():
 
 
 # ── Compact top row: view toggle + action buttons (search becomes the first full line) ──
-_tc1, _tc2, _tc3 = st.columns([2.2, 1, 1.7])
+_tc1, _tc2, _tc3, _tc4 = st.columns([1.8, 1, 1.4, 1.4])
 with _tc1:
     view = st.radio("View", ["📇 Contacts", "📋 Leads"], horizontal=True,
                     label_visibility="collapsed", key="view_mode")
@@ -951,6 +1138,9 @@ with _tc2:
     if st.button("➕ Add Contact", use_container_width=True):
         _add_contact_dialog()
 with _tc3:
+    if st.button("🆕 New Connections", use_container_width=True):
+        _new_connections_dialog()
+with _tc4:
     if st.button("🔄 Enrich from We-Connect", use_container_width=True):
         _enrich_dialog()
 
