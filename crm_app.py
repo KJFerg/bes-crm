@@ -829,6 +829,63 @@ st.divider()
 # API returns (no LinkedIn session involved — it cannot affect the account).
 # ══════════════════════════════════════════════════════════════════════════
 
+# Tag names must match the dropdown exactly.
+TAG_NEWSLETTER = "IT Execs for Newsletter"
+TAG_SECURITY = "IT Security"
+TAG_BIGDATA = "Big Data"
+TAG_HR = "HR Managers"
+
+_SEC_KW = ("ciso", "chief information security", "chief security",
+           "cyber", "information security", "infosec", "security officer",
+           "application security", "product security", "security architecture",
+           "global security", "security engineering", "appsec")
+_DATA_KW = ("chief data", "chief ai", "chief analytics", "data science",
+            "head of data", "head of ai", "analytics", "machine learning",
+            "artificial intelligence", "data & ai", "data and ai")
+_HR_KW = ("chro", "chief human resource", "chief people", "human resources",
+          "talent management", "head of hr", "vp hr", "vp of hr", "people officer")
+
+
+# Standalone "IT" as a word, so "SVP, IT Strategy & Innovation" is caught but
+# ordinary words containing those letters are not. Done with split() rather than
+# a regex so there are no escape sequences to get mangled.
+_IT_PUNCT = ",.;:/|()&-–—"
+
+
+def _has_it_token(t):
+    for ch in _IT_PUNCT:
+        t = t.replace(ch, " ")
+    return "it" in t.split()
+
+
+_IT_EXTRA_KW = ("technology officer", "information officer", "digital officer",
+                "head of information", "head of technology", "head of engineering",
+                "technology leader", "infrastructure", "enterprise architect")
+
+
+def derive_tags(title):
+    """Pick the CRM tags for a new contact from their job title.
+    Security and data/AI leaders are IT executives too, so they get the newsletter
+    tag as well as their specialist tag. HR does not."""
+    t = (title or "").lower()
+    if not t:
+        return []
+    if any(k in t for k in _HR_KW):
+        return [TAG_HR]
+    tags = []
+    if any(k in t for k in _SEC_KW):
+        tags.append(TAG_SECURITY)
+    if any(k in t for k in _DATA_KW):
+        tags.append(TAG_BIGDATA)
+    _is_it = (any(k in t for k in _IT_EXEC_KW)
+              or any(k in t for k in _IT_EXTRA_KW)
+              or _has_it_token(t))
+    if tags or _is_it:
+        if TAG_NEWSLETTER not in tags:
+            tags.insert(0, TAG_NEWSLETTER)
+    return tags
+
+
 def _wc_photo_image(url, timeout=12):
     """Fetch a profile_picture CDN URL and return a PIL image, or None.
     Plain image GET from a server — no login, no LinkedIn session, no profile view."""
@@ -943,7 +1000,8 @@ def _new_connections_dialog():
                         format_func=lambda d: f"{d} days")
     src = st.selectbox("Source to record", AVAILABLE_SOURCES,
                        index=0, key="newconn_source")
-    tags = st.multiselect("Tags to apply to all", options=AVAILABLE_TAGS, key="newconn_tags")
+    tags = st.multiselect("Extra tags for everyone (added on top of the derived ones)",
+                          options=AVAILABLE_TAGS, key="newconn_tags")
     get_photos = st.checkbox("Fetch photos automatically", value=True)
 
     if st.button("🔍 Find new connections", type="primary"):
@@ -969,10 +1027,12 @@ def _new_connections_dialog():
             keep = st.checkbox("", value=True, key=f"nc_keep_{i}", label_visibility="collapsed")
         with c2:
             st.markdown(label)
+            _dt = derive_tags(rec["title"])
             bits = [b for b in (r["Location"], rec["connected_at"], r["Email1"]) if b]
-            if bits:
-                st.caption(" · ".join(bits))
+            bits.append("🏷 " + (", ".join(_dt) if _dt else "no tag matched — check the title"))
+            st.caption(" · ".join(bits))
         if keep:
+            rec["derived_tags"] = _dt
             picked.append(rec)
 
     st.divider()
@@ -984,7 +1044,11 @@ def _new_connections_dialog():
             row = dict(rec["row"])
             row["Sources"] = src
             row["SourceDetail"] = src
-            row["DistributionTags"] = "; ".join(tags)
+            _all_tags = list(rec.get("derived_tags") or [])
+            for _t in tags:  # blanket extras chosen above, no duplicates
+                if _t not in _all_tags:
+                    _all_tags.append(_t)
+            row["DistributionTags"] = "; ".join(_all_tags)
             row["CreatedDate"] = today
             row["Notes"] = f"[{today}] Accepted invitation (We-Connect)"
             img = _wc_photo_image(rec["photo_url"]) if get_photos else None
