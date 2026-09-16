@@ -939,6 +939,95 @@ def _wc_new_record(c):
     }
 
 
+NEWCONN_TAB = "NewConnections"
+NEWCONN_HEADER = ["Slug", "FirstName", "LastName", "Title", "Company", "Location",
+                  "Email", "PhotoURL", "Campaigns", "ConnectedAt",
+                  "Status", "StatusDate", "DerivedTags"]
+
+
+def _newconn_ws(create=False):
+    book = _gspread_book()
+    try:
+        return book.worksheet(NEWCONN_TAB)
+    except Exception:
+        if not create:
+            return None
+        ws = book.add_worksheet(title=NEWCONN_TAB, rows=2000, cols=len(NEWCONN_HEADER))
+        ws.update(f"A1:{chr(64 + len(NEWCONN_HEADER))}1", [NEWCONN_HEADER])
+        return ws
+
+
+def _newconn_load():
+    """Every cached row as a dict. Empty list if the tab does not exist yet."""
+    ws = _newconn_ws()
+    if ws is None:
+        return []
+    vals = ws.get_all_values()
+    if len(vals) < 2:
+        return []
+    hdr = vals[0]
+    out = []
+    for i, row in enumerate(vals[1:], start=2):
+        d = {hdr[j]: (row[j] if j < len(row) else "") for j in range(len(hdr))}
+        d["_rownum"] = i
+        out.append(d)
+    return out
+
+
+def _newconn_rec_to_row(rec):
+    r = rec["row"]
+    return [
+        rec.get("slug", ""), r.get("FirstName", ""), r.get("LastName", ""),
+        rec.get("title", ""), rec.get("company", ""), r.get("Location", ""),
+        r.get("Email1", ""), rec.get("photo_url", ""),
+        "; ".join(rec.get("campaigns") or []), rec.get("connected_at", ""),
+        "Pending", "", "; ".join(derive_tags(rec.get("title", ""))),
+    ]
+
+
+def _newconn_save(found):
+    """Replace the Pending rows with a fresh scan. Added and Skipped rows are kept
+    so people already dealt with never reappear."""
+    ws = _newconn_ws(create=True)
+    existing = _newconn_load()
+    keep = [d for d in existing if (d.get("Status") or "").strip() in ("Added", "Skipped")]
+    settled = {(d.get("Slug") or "").strip() for d in keep}
+
+    rows = []
+    for d in keep:
+        rows.append([d.get(c, "") for c in NEWCONN_HEADER])
+    added = 0
+    for rec in found:
+        if (rec.get("slug") or "").strip() in settled:
+            continue
+        rows.append(_newconn_rec_to_row(rec))
+        added += 1
+
+    ws.clear()
+    ws.update(f"A1:{chr(64 + len(NEWCONN_HEADER))}1", [NEWCONN_HEADER])
+    if rows:
+        ws.update(f"A2:{chr(64 + len(NEWCONN_HEADER))}{len(rows) + 1}", rows)
+    return added
+
+
+def _newconn_mark(rownums, status):
+    """Mark cached rows Added or Skipped, with today's date."""
+    if not rownums:
+        return
+    ws = _newconn_ws()
+    if ws is None:
+        return
+    iStatus = NEWCONN_HEADER.index("Status") + 1
+    iDate = NEWCONN_HEADER.index("StatusDate") + 1
+    today = datetime.now().strftime("%Y-%m-%d")
+    reqs = []
+    for rn in rownums:
+        reqs.append({"range": gspread.utils.rowcol_to_a1(rn, iStatus), "values": [[status]]})
+        reqs.append({"range": gspread.utils.rowcol_to_a1(rn, iDate), "values": [[today]]})
+    for i in range(0, len(reqs), 200):
+        ws.batch_update(reqs[i:i + 200])
+
+
 def _wc_campaign_names(c):
     """Campaign names on a connection object, lowercased."""
     out = []
@@ -1020,81 +1109,109 @@ def find_new_weconnect_contacts(campaign_match="", max_pages=400):
 
 @st.dialog("🆕 New Connections", width="large")
 def _new_connections_dialog():
-    st.caption("People who accepted your invitation on We-Connect but are not in the CRM yet. "
-               "Everything below is pre-filled from We-Connect. Photos are fetched automatically.")
-    camp = st.text_input("Only this campaign (leave blank for all)",
-                         value="Campaign A", key="newconn_camp",
-                         help="Case-insensitive substring match against the campaign "
-                              "names on each connection. Blank scans every campaign.")
-    src = st.selectbox("Source to record", AVAILABLE_SOURCES,
-                       index=0, key="newconn_source")
+    st.caption("People who accepted on We-Connect but are not in the CRM. Results are saved "
+               "to the NewConnections tab, so you can close this and come back — no rescan needed.")
+
+    cached = _newconn_load()
+    pending = [d for d in cached if (d.get("Status") or "Pending").strip() not in ("Added", "Skipped")]
+    n_added = sum(1 for d in cached if (d.get("Status") or "").strip() == "Added")
+    n_skip = sum(1 for d in cached if (d.get("Status") or "").strip() == "Skipped")
+
+    with st.expander("🔄 Rescan We-Connect (slow — walks every page)", expanded=not cached):
+        camp = st.text_input("Only this campaign (leave blank for all)",
+                             value="Connection Invitation", key="newconn_camp",
+                             help="Case-insensitive substring match against the campaign "
+                                  "names on each connection. Blank scans every campaign.")
+        if st.button("Start rescan"):
+            found = find_new_weconnect_contacts(campaign_match=camp)
+            n = _newconn_save(found)
+            st.session_state["add_done_msg"] = (
+                f"Scan saved: {n} pending in the NewConnections tab. "
+                f"Reopen New Connections to work through them.")
+            st.rerun()
+
+    if cached:
+        st.caption(f"Cached: **{len(pending)} pending** · {n_added} added · {n_skip} skipped")
+    if not pending:
+        st.info("Nothing pending. Rescan above to look for new people.")
+        return
+
+    src = st.selectbox("Source to record", AVAILABLE_SOURCES, index=0, key="newconn_source")
     tags = st.multiselect("Extra tags for everyone (added on top of the derived ones)",
                           options=AVAILABLE_TAGS, key="newconn_tags")
     get_photos = st.checkbox("Fetch photos automatically", value=True)
 
-    if st.button("🔍 Find new connections", type="primary"):
-        st.session_state["newconn_found"] = find_new_weconnect_contacts(campaign_match=camp)
+    show = pending[:60]
+    if len(pending) > len(show):
+        st.caption(f"Showing the first {len(show)} of {len(pending)}. "
+                   f"Work through these and the rest stay queued.")
 
-    found = st.session_state.get("newconn_found")
-    if found is None:
-        return
-    if not found:
-        st.info("Nothing new — everyone in scope is already in the CRM. "
-                "If you expected someone, try clearing the campaign box: they may be "
-                "in a different campaign, or not in a campaign at all.")
-        return
-
-    st.write(f"**{len(found)} new — untick anyone you don't want.**")
     picked = []
-    for i, rec in enumerate(found):
-        r = rec["row"]
-        nm = f"{r['FirstName']} {r['LastName']}".strip() or rec["slug"]
-        label = f"**{nm}** — {rec['title'] or '(no title)'}"
-        if rec["company"]:
-            label += f" at {rec['company']}"
+    for i, d in enumerate(show):
+        nm = f"{d.get('FirstName','')} {d.get('LastName','')}".strip() or d.get("Slug", "")
+        label = f"**{nm}** — {d.get('Title') or '(no title)'}"
+        if d.get("Company"):
+            label += f" at {d['Company']}"
         c1, c2 = st.columns([1, 14])
         with c1:
-            keep = st.checkbox("", value=True, key=f"nc_keep_{i}", label_visibility="collapsed")
+            keep = st.checkbox("", value=True, key=f"nc_keep_{d.get('Slug','')}_{i}",
+                               label_visibility="collapsed")
         with c2:
             st.markdown(label)
-            _dt = derive_tags(rec["title"])
-            bits = [b for b in (r["Location"], rec["connected_at"], r["Email1"]) if b]
-            bits.append("🏷 " + (", ".join(_dt) if _dt else "no tag matched — check the title"))
+            dt = d.get("DerivedTags") or ""
+            bits = [b for b in (d.get("Location"), d.get("ConnectedAt"), d.get("Email")) if b]
+            bits.append("🏷 " + (dt if dt else "no tag matched — check the title"))
             st.caption(" · ".join(bits))
         if keep:
-            rec["derived_tags"] = _dt
-            picked.append(rec)
+            picked.append(d)
 
     st.divider()
-    if st.button(f"➕ Add all ticked ({len(picked)})", type="primary", disabled=not picked):
+    b1, b2 = st.columns(2)
+    with b1:
+        do_add = st.button(f"➕ Add all ticked ({len(picked)})", type="primary", disabled=not picked)
+    with b2:
+        do_skip = st.button(f"🚫 Skip ticked ({len(picked)})", disabled=not picked)
+
+    if do_skip:
+        _newconn_mark([d["_rownum"] for d in picked], "Skipped")
+        st.session_state["add_done_msg"] = f"Skipped {len(picked)} — they will not appear again."
+        st.rerun()
+
+    if do_add:
         today = datetime.now().strftime("%Y-%m-%d")
-        ok, failed, photos = 0, [], 0
+        ok_rows, failed, photos = [], [], 0
         bar = st.progress(0.0, text="Adding…")
-        for n, rec in enumerate(picked, start=1):
-            row = dict(rec["row"])
-            row["Sources"] = src
-            row["SourceDetail"] = src
-            _all_tags = list(rec.get("derived_tags") or [])
-            for _t in tags:  # blanket extras chosen above, no duplicates
-                if _t not in _all_tags:
-                    _all_tags.append(_t)
-            row["DistributionTags"] = "; ".join(_all_tags)
-            row["CreatedDate"] = today
-            row["Notes"] = f"[{today}] Accepted invitation (We-Connect)"
-            img = _wc_photo_image(rec["photo_url"]) if get_photos else None
+        for n, d in enumerate(picked, start=1):
+            slug = (d.get("Slug") or "").strip()
+            row = {
+                "FirstName": d.get("FirstName", ""), "LastName": d.get("LastName", ""),
+                "LinkedInURL": f"https://www.linkedin.com/in/{slug}/" if slug else "",
+                "Positions": f"{d.get('Title','')} at {d.get('Company','')}".strip(" at "),
+                "Location": d.get("Location", ""), "Email1": d.get("Email", ""),
+                "Sources": src, "SourceDetail": src, "CreatedDate": today,
+                "Notes": f"[{today}] Accepted invitation (We-Connect)",
+            }
+            all_tags = [t for t in (d.get("DerivedTags") or "").split(";") if t.strip()]
+            all_tags = [t.strip() for t in all_tags]
+            for t in tags:
+                if t not in all_tags:
+                    all_tags.append(t)
+            row["DistributionTags"] = "; ".join(all_tags)
+
+            img = _wc_photo_image(d.get("PhotoURL")) if get_photos else None
             key = uuid.uuid4().hex if img is not None else ""
             row["PhotoKey"] = key
             nm = f"{row['FirstName']} {row['LastName']}".strip()
             if add_contact(row):
-                ok += 1
+                ok_rows.append(d["_rownum"])
                 if img is not None and set_photo(key, pil_thumb_b64(img), nm):
                     photos += 1
             else:
-                failed.append(nm or rec["slug"])
+                failed.append(nm or slug)
             bar.progress(n / len(picked), text=f"Adding… {n}/{len(picked)}")
         bar.empty()
-        st.session_state.pop("newconn_found", None)
-        msg = f"Added {ok} contact(s)"
+        _newconn_mark(ok_rows, "Added")
+        msg = f"Added {len(ok_rows)} contact(s)"
         if get_photos:
             msg += f", {photos} with photos"
         if failed:
