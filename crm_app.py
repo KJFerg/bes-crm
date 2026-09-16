@@ -985,29 +985,27 @@ def _newconn_rec_to_row(rec):
     ]
 
 
-def _newconn_save(found):
-    """Replace the Pending rows with a fresh scan. Added and Skipped rows are kept
-    so people already dealt with never reappear."""
-    ws = _newconn_ws(create=True)
+def _newconn_begin(ws):
+    """Clear the Pending rows, keep Added/Skipped, and return the set of settled slugs.
+    Called once at the START of a scan so the tab exists immediately."""
     existing = _newconn_load()
     keep = [d for d in existing if (d.get("Status") or "").strip() in ("Added", "Skipped")]
-    settled = {(d.get("Slug") or "").strip() for d in keep}
-
-    rows = []
-    for d in keep:
-        rows.append([d.get(c, "") for c in NEWCONN_HEADER])
-    added = 0
-    for rec in found:
-        if (rec.get("slug") or "").strip() in settled:
-            continue
-        rows.append(_newconn_rec_to_row(rec))
-        added += 1
-
+    settled = {(d.get("Slug") or "").strip() for d in keep if (d.get("Slug") or "").strip()}
+    last = chr(64 + len(NEWCONN_HEADER))
     ws.clear()
-    ws.update(f"A1:{chr(64 + len(NEWCONN_HEADER))}1", [NEWCONN_HEADER])
-    if rows:
-        ws.update(f"A2:{chr(64 + len(NEWCONN_HEADER))}{len(rows) + 1}", rows)
-    return added
+    ws.update(f"A1:{last}1", [NEWCONN_HEADER])
+    if keep:
+        rows = [[d.get(c, "") for c in NEWCONN_HEADER] for d in keep]
+        ws.update(f"A2:{last}{len(rows) + 1}", rows)
+    return settled
+
+
+def _newconn_append(ws, recs):
+    """Append a page's worth of finds straight away, so an interrupted scan keeps them."""
+    if not recs:
+        return 0
+    ws.append_rows([_newconn_rec_to_row(r) for r in recs], value_input_option="USER_ENTERED")
+    return len(recs)
 
 
 def _newconn_mark(rownums, status):
@@ -1041,7 +1039,7 @@ def _wc_campaign_names(c):
     return out
 
 
-def find_new_weconnect_contacts(campaign_match="", max_pages=400):
+def find_new_weconnect_contacts(campaign_match="", max_pages=400, persist=True):
     """Every We-Connect connection whose LinkedIn slug is NOT already in the CRM.
 
     No date filter: the CRM slug check already prevents duplicates, so a date
@@ -1072,7 +1070,23 @@ def find_new_weconnect_contacts(campaign_match="", max_pages=400):
             known.add(g)
 
     want = (campaign_match or "").strip().lower()
-    found, page, seen, skipped_campaign = [], 1, 0, 0
+    found, page, seen, skipped_campaign, written = [], 1, 0, 0, 0
+
+    # Create the tab and clear Pending BEFORE scanning, so it exists straight away
+    # and each page can be written as it is processed.
+    ws_cache = None
+    if persist:
+        try:
+            ws_cache = _newconn_ws(create=True)
+            settled = _newconn_begin(ws_cache)
+            known |= settled  # never re-offer someone already added or skipped
+            st.caption(f"Writing to the '{NEWCONN_TAB}' tab as the scan runs — "
+                       f"safe to close this dialog, nothing will be lost.")
+        except Exception as e:
+            st.warning(f"Could not open the {NEWCONN_TAB} tab ({e}). "
+                       f"Scanning anyway, but results will not be saved.")
+            ws_cache = None
+
     status = st.empty()
     while page <= max_pages:
         try:
@@ -1083,6 +1097,7 @@ def find_new_weconnect_contacts(campaign_match="", max_pages=400):
         if not rows:
             break
         seen += len(rows)
+        page_new = []
         for c in rows:
             rec = _wc_new_record(c)
             if not rec["slug"] or rec["slug"] in known:
@@ -1094,9 +1109,15 @@ def find_new_weconnect_contacts(campaign_match="", max_pages=400):
                     continue
             rec["campaigns"] = _wc_campaign_names(c)
             found.append(rec)
+            page_new.append(rec)
             known.add(rec["slug"])  # guard against the same person on two pages
+        if ws_cache is not None and page_new:
+            try:
+                written += _newconn_append(ws_cache, page_new)
+            except Exception as e:
+                st.warning(f"Could not write page {page} to the tab ({e}).")
         status.info(f"Scanning We-Connect… page {page} · {seen:,} connections checked · "
-                    f"**{len(found)} new**")
+                    f"**{len(found)} new** · {written} saved")
         page += 1
     status.empty()
     msg = f"Scan complete: {page - 1} pages, {seen:,} connections checked, {len(found)} new."
@@ -1124,9 +1145,8 @@ def _new_connections_dialog():
                                   "names on each connection. Blank scans every campaign.")
         if st.button("Start rescan"):
             found = find_new_weconnect_contacts(campaign_match=camp)
-            n = _newconn_save(found)
             st.session_state["add_done_msg"] = (
-                f"Scan saved: {n} pending in the NewConnections tab. "
+                f"Scan finished: {len(found)} pending in the {NEWCONN_TAB} tab. "
                 f"Reopen New Connections to work through them.")
             st.rerun()
 
