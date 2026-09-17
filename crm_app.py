@@ -1012,6 +1012,7 @@ def _newconn_mark(rownums, status):
     """Mark cached rows Added or Skipped, with today's date."""
     if not rownums:
         return
+    import gspread  # imported locally, as elsewhere in this file
     ws = _newconn_ws()
     if ws is None:
         return
