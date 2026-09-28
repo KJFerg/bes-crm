@@ -49,6 +49,7 @@ AVAILABLE_SOURCES = [
     "We-Connect Campaign A",
     "We-Connect Campaign B",
     "LinkedIn inbound (they messaged me)",
+    "Emailed me",
     "LinkedIn comment/post engagement",
     "Referral",
     "Website inquiry",
