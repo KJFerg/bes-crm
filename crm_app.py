@@ -1277,7 +1277,7 @@ def _add_contact_dialog():
                 _photo_key = uuid.uuid4().hex if _add_img is not None else ""
                 _new = {
                     "FirstName": f_first.strip(), "LastName": f_last.strip(),
-                    "LinkedInURL": f_url.strip(), "Positions": f_pos.strip(),
+                    "LinkedInURL": f_url.strip().split("?")[0].rstrip("/"), "Positions": f_pos.strip(),
                     "City": f_city.strip(), "State": f_state.strip(),
                     "Email1": f_email.strip(), "Phone1": f_phone.strip(),
                     "Sources": (f_source_custom.strip() or f_source),
